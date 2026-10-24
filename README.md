@@ -10,23 +10,45 @@ Caddy's own package file by file, so apt manages the binary that actually runs: 
 
 ## On a server
 
-As root:
+As root. If
+[dpkg-caddy-cloudflare-hook](https://github.com/MarcFauser/dpkg-caddy-cloudflare-hook) is
+installed, remove it first (`./install.sh --uninstall` in its folder).
+
+**1. Add this repository.** The first line is for minimal installations, which have neither
+curl nor always ca-certificates.
 
 ```bash
 apt install curl ca-certificates
 curl -fsSL https://marcfauser.github.io/caddy-deb/caddy-deb.gpg -o /usr/share/keyrings/caddy-deb.gpg
 echo "deb [signed-by=/usr/share/keyrings/caddy-deb.gpg] https://marcfauser.github.io/caddy-deb stable main" > /etc/apt/sources.list.d/caddy-deb.list
-rm -f /etc/apt/sources.list.d/caddy-stable.list
-apt update
-apt install caddy
 ```
 
-The first line is for minimal installations, which have neither curl nor always
-ca-certificates. Remove Caddy's own repository (`caddy-stable.list` above): otherwise apt
-takes a new official version without plugins as soon as it is out and this repository's
-build is not yet. If
-[dpkg-caddy-cloudflare-hook](https://github.com/MarcFauser/dpkg-caddy-cloudflare-hook) is
-installed, remove it first (`./install.sh --uninstall` in its folder).
+**2. Remove Caddy's own repository.** Otherwise apt takes a new official version without
+plugins as soon as it is out and this repository's build is not yet. Its file name depends on
+how it was set up (`caddy-stable.list`, or `caddy-stable.sources` after
+`apt modernize-sources` on Debian 13), so look for its address:
+
+```bash
+grep -rl dl.cloudsmith.io/public/caddy /etc/apt/sources.list /etc/apt/sources.list.d/ 2>/dev/null
+```
+
+(`/etc/apt/sources.list` does not exist on a fresh Debian 13; `2>/dev/null` hides that.)
+
+Delete the `.list` and `.sources` files it names. apt reads no other files there; a
+`.list.bak` left by `apt modernize-sources` is inactive and can go too. If
+`/etc/apt/sources.list` itself is named, remove only the Caddy line from it.
+
+**3. Install and check.**
+
+```bash
+apt update
+apt install caddy
+apt-cache policy caddy
+```
+
+`apt-cache policy caddy` must show the installed version from `marcfauser.github.io` and no
+`dl.cloudsmith.io` at all. Debian's own, much older `caddy` may appear; its version is lower,
+so apt does not choose it.
 
 After that, Caddy updates come with `apt upgrade` or unattended-upgrades like any other
 package. Configuration, service and paths are the same as with Caddy's package.

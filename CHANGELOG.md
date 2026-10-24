@@ -5,6 +5,23 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html). This is the version of the
 packaging; the package version follows Caddy (`<caddy version>-<run number>`).
 
+## [1.0.4] - 2026-10-25
+
+### Fixed
+
+- Removing Caddy's own repository used a fixed file name, `caddy-stable.list`. On Debian 13
+  `apt modernize-sources` turns it into `caddy-stable.sources` (and keeps the old file as
+  `.list.bak`), so the `rm` did nothing and the official repository stayed active, as found on
+  the first server. The README now finds the repository by its address and ends with an
+  `apt-cache policy caddy` check.
+
+### Changed
+
+- The Pages index page links to the README instead of repeating the instructions, so that a
+  correction there does not need a new package.
+- Pushes that change only README, HISTORY, CHANGELOG or LICENSE no longer run the workflow,
+  so they publish no new package revision that the servers would install.
+
 ## [1.0.3] - 2026-10-25
 
 ### Changed

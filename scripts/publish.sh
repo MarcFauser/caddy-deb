@@ -60,15 +60,8 @@ cat > site/index.html <<EOF
 <p>apt repository with Caddy and the plugins listed in
 <a href="https://github.com/MarcFauser/caddy-deb/blob/main/main.go">main.go</a>.
 Current package: caddy $version (amd64).</p>
-<p>As root:</p>
-<pre>
-apt install curl ca-certificates
-curl -fsSL https://marcfauser.github.io/caddy-deb/caddy-deb.gpg -o /usr/share/keyrings/caddy-deb.gpg
-echo "deb [signed-by=/usr/share/keyrings/caddy-deb.gpg] https://marcfauser.github.io/caddy-deb stable main" > /etc/apt/sources.list.d/caddy-deb.list
-rm -f /etc/apt/sources.list.d/caddy-stable.list
-apt update
-apt install caddy
-</pre>
+<p>How to set up a server: <a href="https://github.com/MarcFauser/caddy-deb#on-a-server">README, "On a server"</a>.
+The instructions live only there, so that a correction does not need a new package.</p>
 <p>Signing key fingerprint: $public_fpr</p>
 <p>Source and documentation: <a href="https://github.com/MarcFauser/caddy-deb">github.com/MarcFauser/caddy-deb</a></p>
 </body>

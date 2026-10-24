@@ -6,6 +6,14 @@ name: build
 on:
   push:
     branches: [main]
+    # A push that changes only these files runs nothing, so a documentation fix does not
+    # publish a new package revision, which every server would install and restart Caddy for.
+    # (GitHub: the workflow is skipped only when all changed paths match.)
+    paths-ignore:
+      - README.md
+      - HISTORY.md
+      - CHANGELOG.md
+      - LICENSE
   pull_request:
     branches: [main]
   workflow_dispatch:
