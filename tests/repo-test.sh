@@ -20,18 +20,22 @@ echo "deb [signed-by=/usr/share/keyrings/caddy-deb.gpg] $url stable main" > /etc
 # GitHub Pages may need a moment until the new files are served everywhere
 for attempt in 1 2 3 4 5 6
 do
-    if apt-get update -q && apt-cache policy caddy | grep -q "Candidate: $expected\$"
+    apt-get update -q || true
+    # captured first: with pipefail, grep -q ending the pipe early turns a hit into a miss
+    policy="$(apt-cache policy caddy)"
+    if grep -q "Candidate: $expected\$" <<< "$policy"
     then
         break
     fi
     if [ "$attempt" -eq 6 ]
     then
-        apt-cache policy caddy
+        printf '%s\n' "$policy"
         echo "FAIL: the repository does not offer caddy $expected" >&2
         exit 1
     fi
     sleep 30
 done
+printf '%s\n' "$policy"
 
 apt-get install -y -q caddy
 [ "$(dpkg-query -W -f='${Version}' caddy)" = "$expected" ] || { echo "FAIL: installed version is not $expected" >&2; exit 1; }

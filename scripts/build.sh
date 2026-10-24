@@ -20,7 +20,9 @@ mkdir -p build/man out
 
 CADDY_VERSION="$(go list -m -f '{{.Version}}' github.com/caddyserver/caddy/v2)"
 CADDY_VERSION="${CADDY_VERSION#v}"
-PACKAGING_VERSION="$(sed -n 's/^## \[\([0-9][0-9.]*\)\].*/\1/p' CHANGELOG.md | head -n 1)"
+# one process instead of "sed | head": under pipefail, head closing the pipe early can make
+# sed die of SIGPIPE and the whole assignment fail
+PACKAGING_VERSION="$(awk -F'[][]' '/^## \[[0-9]/ { print $2; exit }' CHANGELOG.md)"
 PLUGINS="$(plugin_imports main.go | paste -sd ' ' -)"
 export CADDY_VERSION PKG_RELEASE PACKAGING_VERSION PLUGINS
 

@@ -5,6 +5,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html). This is the version of the
 packaging; the package version follows Caddy (`<caddy version>-<run number>`).
 
+## [1.0.2] - 2026-10-24
+
+### Fixed
+
+- The test of the published repository failed although apt offered the right version:
+  `apt-cache policy | grep -q` under `pipefail` fails when grep closes the pipe before
+  apt-cache is done. The output is now captured first. `scripts/build.sh` read the
+  packaging version with `sed | head`, which has the same race; it uses one `awk` now.
+
 ## [1.0.1] - 2026-10-24
 
 ### Fixed
