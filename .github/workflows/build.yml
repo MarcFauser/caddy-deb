@@ -4,7 +4,8 @@ name: build
 # when the tests pass. Pushes to main and manual runs: build, test, publish to GitHub Pages
 # and check the published repository. A new package revision is published only when the
 # package itself changed (scripts/choose-package.sh); otherwise the published package stays
-# and the servers have nothing to install.
+# and the servers have nothing to install. The repository also offers earlier versions from
+# the GitHub releases (KEEP_VERSIONS in total, scripts/fetch-older.sh) for going back.
 on:
   push:
     branches: [main]
@@ -29,6 +30,8 @@ permissions:
 
 env:
   PAGES_URL: https://marcfauser.github.io/caddy-deb
+  # versions the repository offers: the current package and the highest earlier ones
+  KEEP_VERSIONS: 5
   # caddyserver/dist: systemd units, Caddyfile, welcome page and maintainer scripts
   # (Apache-2.0), the same files Caddy's own package contains
   DIST_REF: f94a1d2626835ff4157e85296fb8e4fa5500e0fb
@@ -131,6 +134,7 @@ jobs:
       page_url: ${{ steps.deploy.outputs.page_url }}
       version: ${{ steps.version.outputs.version }}
       reused: ${{ steps.choose.outputs.reused }}
+      offered: ${{ steps.offered.outputs.offered }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
@@ -144,6 +148,11 @@ jobs:
         run: bash scripts/choose-package.sh
       - id: version
         run: echo "version=$(cat out/version.txt)" >> "$GITHUB_OUTPUT"
+      - name: fetch the earlier versions from the GitHub releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: bash scripts/fetch-older.sh
       - name: import the signing key
         env:
           APT_SIGNING_KEY: ${{ secrets.APT_SIGNING_KEY }}
@@ -158,6 +167,8 @@ jobs:
         run: |
           command -v apt-ftparchive >/dev/null || sudo apt-get install -y -q apt-utils
           bash scripts/publish.sh
+      - id: offered
+        run: echo "offered=$(paste -sd ' ' out/offered-versions.txt)" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-pages-artifact@v5
         with:
           path: site
@@ -189,4 +200,4 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
-      - run: bash tests/repo-test.sh "${{ needs.publish.outputs.page_url }}" "${{ needs.publish.outputs.version }}"
+      - run: bash tests/repo-test.sh "${{ needs.publish.outputs.page_url }}" "${{ needs.publish.outputs.version }}" "${{ needs.publish.outputs.offered }}"

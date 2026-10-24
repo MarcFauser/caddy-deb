@@ -70,3 +70,26 @@ comparison uses `caddy build-info` without those lines. That still covers the Go
 every module with its checksum and the build flags, so a newer Go or a changed dependency
 still produces a new revision. The man pages are left out, because cobra writes the build
 date into them unless `SOURCE_DATE_EPOCH` is set, and they follow from the binary anyway.
+
+## 2026-10-25 - earlier versions for going back
+
+Until 1.2.0 the Pages site held only the newest package. If that one had a bug, a server
+could only fetch an older `.deb` from the GitHub releases by hand. Caddy's own package is no
+fallback: it lacks the plugins, and Caddy refuses a configuration that uses a missing module.
+The owner asked for the last few versions in the repository itself; five it is, the current
+one and four earlier, which costs about 90 MB of the 1 GB a Pages site may use.
+
+The earlier packages come from the GitHub releases, not from the previous Pages site: the
+releases are the permanent record, while the site only holds what the last run put there.
+GitHub records a SHA-256 digest for every release asset, so each download is checked against
+it and against its tag. A release higher than the package being published is refused, because
+apt would then install that one instead. apt-ftparchive lists every package it finds in the
+pool, several versions of the same package included (measured with 2.11.7-4 and 2.11.7-5; it
+lists them in file name order), and apt offers all of them. That order also exposed a bug
+before it could bite: `choose-package.sh` compared with the first caddy entry of the index,
+which with several versions would have been an older one.
+
+The repository test now walks through the way back exactly as the README describes it:
+install the oldest offered version, hold it, check that `apt-get upgrade` keeps it, release
+the hold and check that the upgrade brings the newest back. Non-interactively that needs
+`--allow-downgrades`; interactively apt asks instead (apt-private/private-install.cc).

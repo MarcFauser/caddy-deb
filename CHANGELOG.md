@@ -5,6 +5,26 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html). This is the version of the
 packaging; the package version follows Caddy (`<caddy version>-<run number>`).
 
+## [1.2.0] - 2026-10-25
+
+### Added
+
+- The repository offers the current package and the four highest earlier versions
+  (`KEEP_VERSIONS`), so a server can go back with `apt install caddy=<version>` and
+  `apt-mark hold caddy` if the newest has a bug; the README describes it.
+  `scripts/fetch-older.sh` takes them from the GitHub releases and checks each against the
+  SHA-256 digest GitHub records and against its tag; it refuses a release higher than the
+  package being published. The index page lists the earlier versions.
+- The test of the published repository checks that apt offers exactly these versions, then
+  goes back to the oldest, holds it through `apt-get upgrade`, releases the hold and upgrades
+  to the newest again.
+
+### Fixed
+
+- `scripts/choose-package.sh` compared the new package with the first caddy entry of the
+  published index. With several versions, `apt-ftparchive` lists them in file name order, so
+  that would have been an older one; it now takes the highest version.
+
 ## [1.1.0] - 2026-10-25
 
 ### Added

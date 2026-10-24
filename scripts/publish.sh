@@ -1,10 +1,11 @@
 #!/bin/bash
-# Builds the apt repository for GitHub Pages in site/: the package from out/ under pool/,
-# the Packages index, a Release file signed as InRelease and Release.gpg, the public key,
-# the source file caddy-deb.sources for the servers and an index page. Only the newest
-# package is kept here; every package also stays attached to its GitHub release. Needs
-# apt-ftparchive (apt-utils) and gpg holding the private signing key, which must belong to
-# the public key caddy-deb.gpg in the repository.
+# Builds the apt repository for GitHub Pages in site/: the package from out/ and the earlier
+# ones from older/ (scripts/fetch-older.sh) under pool/, the Packages index, a Release file
+# signed as InRelease and Release.gpg, the public key, the source file caddy-deb.sources for
+# the servers and an index page. Writes the offered versions, highest first, to
+# out/offered-versions.txt. Every package also stays attached to its GitHub release. Needs
+# apt-ftparchive (apt-utils), dpkg-deb and gpg holding the private signing key, which must
+# belong to the public key caddy-deb.gpg in the repository.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -29,6 +30,28 @@ fi
 rm -rf site
 mkdir -p site/pool/main/c/caddy "$packages_dir"
 cp out/*.deb site/pool/main/c/caddy/
+if [ -d older ]
+then
+    find older -maxdepth 1 -name '*.deb' -exec cp {} site/pool/main/c/caddy/ \;
+fi
+
+# The offered versions, highest first; the package of this run must be the highest, or apt
+# would install an earlier one.
+version="$(cat out/version.txt)"
+offered="$(for deb in site/pool/main/c/caddy/*.deb; do dpkg-deb --field "$deb" Version; done | sort -V -r)"
+highest="$(printf '%s\n' "$offered" | awk 'NR == 1')"
+if [ "$highest" != "$version" ]
+then
+    echo "FAIL: the highest offered version is $highest, not the package of this run, $version" >&2
+    exit 1
+fi
+if [ "$(printf '%s\n' "$offered" | sort -u | wc -l)" -ne "$(printf '%s\n' "$offered" | wc -l)" ]
+then
+    echo "FAIL: a version is in the pool twice" >&2
+    exit 1
+fi
+printf '%s\n' "$offered" > out/offered-versions.txt
+echo "offered versions: $(paste -sd ' ' out/offered-versions.txt)"
 
 (cd site && apt-ftparchive packages pool) > "$packages_dir/Packages"
 gzip -9nk "$packages_dir/Packages"
@@ -69,7 +92,7 @@ cp "$key_file" site/caddy-deb.gpg
 grep -q -- '-----END PGP PUBLIC KEY BLOCK-----' site/caddy-deb.sources \
     || { echo "FAIL: no key block in caddy-deb.sources" >&2; exit 1; }
 
-version="$(cat out/version.txt)"
+earlier="$(printf '%s\n' "$offered" | awk 'NR > 1' | paste -sd ' ')"
 cat > site/index.html <<EOF
 <!doctype html>
 <html lang="en">
@@ -78,7 +101,8 @@ cat > site/index.html <<EOF
 <h1>caddy-deb</h1>
 <p>apt repository with Caddy and the plugins listed in
 <a href="https://github.com/MarcFauser/caddy-deb/blob/main/main.go">main.go</a>.
-Current package: caddy $version (amd64).</p>
+Current package: caddy $version (amd64).
+Earlier versions offered for going back: ${earlier:-none}.</p>
 <p>Source file for apt, with the signing key embedded:
 <a href="caddy-deb.sources">caddy-deb.sources</a>.
 How to set up a server: <a href="https://github.com/MarcFauser/caddy-deb#on-a-server">README, "On a server"</a>.</p>

@@ -48,14 +48,26 @@ then
     exit 0
 fi
 
-field()
-{
-    awk -v key="$1" '/^Package: caddy$/ { p = 1 } p && index($0, key ": ") == 1 { print substr($0, length(key) + 3); exit }' "$work/Packages"
-}
+# The index lists several caddy versions (KEEP_VERSIONS, scripts/fetch-older.sh), in file name
+# order, so the oldest may come first: compare with the highest version.
+entries="$(awk '
+    /^Package: / { p = ($2 == "caddy"); v = f = s = "" }
+    p && /^Version: / { v = $2 }
+    p && /^Filename: / { f = $2 }
+    p && /^SHA256: / { s = $2 }
+    p && /^$/ { if (v != "" && f != "" && s != "") print v, f, s; p = 0 }
+    END { if (p && v != "" && f != "" && s != "") print v, f, s }
+' "$work/Packages")"
 
-filename="$(field Filename)"
-version="$(field Version)"
-sha256="$(field SHA256)"
+version="" filename="" sha256=""
+while read -r v f s
+do
+    [ -n "$v" ] || continue
+    if [ -z "$version" ] || dpkg --compare-versions "$v" gt "$version"
+    then
+        version="$v" filename="$f" sha256="$s"
+    fi
+done <<< "$entries"
 if [ -z "$filename" ] || [ -z "$version" ] || [ -z "$sha256" ]
 then
     echo "the published index has no complete caddy entry"
