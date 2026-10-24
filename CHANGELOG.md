@@ -5,6 +5,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html). This is the version of the
 packaging; the package version follows Caddy (`<caddy version>-<run number>`).
 
+## [1.0.1] - 2026-10-24
+
+### Fixed
+
+- The install test failed in the ubuntu container: that image excludes man pages from
+  installation (`path-exclude` in `/etc/dpkg/dpkg.cfg.d/`), so `dpkg --verify` reports
+  them as missing. The test now leaves out man pages on such systems and says so.
+
 ## [1.0.0] - 2026-10-24
 
 ### Added

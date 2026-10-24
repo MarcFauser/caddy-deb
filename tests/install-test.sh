@@ -44,10 +44,29 @@ step "checks"
 [ "$(dpkg-query -W -f='${Version}' caddy)" = "$expected" ] || fail "installed version is not $expected"
 caddy version
 check_plugins /usr/bin/caddy main.go || fail "a plugin is missing from /usr/bin/caddy"
+
+# Minimized images (the ubuntu Docker image) tell dpkg not to install man pages; dpkg
+# --verify then reports them as missing, for Caddy's own package just the same.
+man_excluded=0
+if grep -rqs '^path-exclude=/usr/share/man/' /etc/dpkg/dpkg.cfg.d/
+then
+    man_excluded=1
+    echo "note: this system excludes /usr/share/man from installation (dpkg path-exclude)"
+fi
 verify="$(dpkg --verify caddy || true)"
+if [ "$man_excluded" -eq 1 ]
+then
+    verify="$(grep -v ' /usr/share/man/' <<< "$verify" || true)"
+fi
 [ -z "$verify" ] || fail "dpkg --verify caddy: $verify"
-for f in /usr/bin/caddy /lib/systemd/system/caddy.service /lib/systemd/system/caddy-api.service \
-         /etc/caddy/Caddyfile /usr/share/caddy/index.html /etc/bash_completion.d/caddy /usr/share/man/man8/caddy.8.gz
+
+files="/usr/bin/caddy /lib/systemd/system/caddy.service /lib/systemd/system/caddy-api.service
+       /etc/caddy/Caddyfile /usr/share/caddy/index.html /etc/bash_completion.d/caddy"
+if [ "$man_excluded" -eq 0 ]
+then
+    files="$files /usr/share/man/man8/caddy.8.gz"
+fi
+for f in $files
 do
     [ -e "$f" ] || fail "$f is missing"
 done
