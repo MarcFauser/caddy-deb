@@ -2,12 +2,13 @@ name: build
 
 # Pull requests (also Dependabot's): build and test. Dependabot's pull requests are merged
 # when the tests pass. Pushes to main and manual runs: build, test, publish to GitHub Pages
-# and check the published repository.
+# and check the published repository. A new package revision is published only when the
+# package itself changed (scripts/choose-package.sh); otherwise the published package stays
+# and the servers have nothing to install.
 on:
   push:
     branches: [main]
-    # A push that changes only these files runs nothing, so a documentation fix does not
-    # publish a new package revision, which every server would install and restart Caddy for.
+    # A push that changes only these files runs nothing at all.
     # (GitHub: the workflow is skipped only when all changed paths match.)
     paths-ignore:
       - README.md
@@ -17,11 +18,17 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      new_revision:
+        description: Publish a new package revision even if the package did not change
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 env:
+  PAGES_URL: https://marcfauser.github.io/caddy-deb
   # caddyserver/dist: systemd units, Caddyfile, welcome page and maintainer scripts
   # (Apache-2.0), the same files Caddy's own package contains
   DIST_REF: f94a1d2626835ff4157e85296fb8e4fa5500e0fb
@@ -123,12 +130,18 @@ jobs:
     outputs:
       page_url: ${{ steps.deploy.outputs.page_url }}
       version: ${{ steps.version.outputs.version }}
+      reused: ${{ steps.choose.outputs.reused }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
           name: deb
           path: out
+      - id: choose
+        name: keep the published package if it did not change
+        env:
+          FORCE: ${{ inputs.new_revision }}
+        run: bash scripts/choose-package.sh
       - id: version
         run: echo "version=$(cat out/version.txt)" >> "$GITHUB_OUTPUT"
       - name: import the signing key
@@ -151,6 +164,8 @@ jobs:
       - id: deploy
         uses: actions/deploy-pages@v5
       - name: GitHub release with the package
+        # a kept package already has its release
+        if: steps.choose.outputs.reused == 'false'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}

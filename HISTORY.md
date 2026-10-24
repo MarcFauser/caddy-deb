@@ -45,3 +45,28 @@ so they could not sign anyway.
 The repository on Pages keeps only the newest package; older ones stay in the GitHub
 releases. The signing key is ed25519, created by the owner with `tools/new-signing-key.sh`
 so that the private key never leaves GitHub's secret store and the owner's machine.
+
+## 2026-10-25 - one source file, and no revision without a change
+
+The first servers were set up with a one-line `caddy-deb.list` and a keyring in
+`/usr/share/keyrings`. On Debian 13, `apt modernize-sources` (apt 2.9.26 and newer) converts
+such files to the deb822 format and keeps the original as `.list.bak`; Caddy's own source had
+gone that way on the first server. The owner asked whether this repository should not start
+out in the new format. It should: a deb822 file can carry the public key in `Signed-By`
+itself (apt 2.3.10 and newer, i.e. Debian 12 and Ubuntu 22.04 on), so a server needs one
+download instead of two and there is no keyring file at all. That also settles where such a
+file would belong: sources.list(5) puts keyrings added by the administrator into
+`/etc/apt/keyrings`, while `/usr/share/keyrings` is for keyrings shipped by packages, which
+is where the first instructions had put it. The old way keeps working; moving to the new
+file means removing the old one first, because apt refuses two entries for the same
+repository with different `Signed-By`.
+
+Every run on `main` used to publish a new package revision, so a change to the README or a
+script made every server download and restart Caddy for an identical binary. Version 1.0.4
+stopped documentation-only pushes from running the workflow at all; 1.1.0 compares the
+package itself. The binary cannot be compared byte by byte: Go stamps the commit it was
+built from into it (`vcs.revision`, `vcs.time`, and the main module's version), so the
+comparison uses `caddy build-info` without those lines. That still covers the Go version,
+every module with its checksum and the build flags, so a newer Go or a changed dependency
+still produces a new revision. The man pages are left out, because cobra writes the build
+date into them unless `SOURCE_DATE_EPOCH` is set, and they follow from the binary anyway.

@@ -1,9 +1,10 @@
 #!/bin/bash
 # Builds the apt repository for GitHub Pages in site/: the package from out/ under pool/,
-# the Packages index, a Release file signed as InRelease and Release.gpg, the public key
-# and an index page. Only the newest package is kept here; every package also stays
-# attached to its GitHub release. Needs apt-ftparchive (apt-utils) and gpg holding the
-# private signing key, which must belong to the public key caddy-deb.gpg in the repository.
+# the Packages index, a Release file signed as InRelease and Release.gpg, the public key,
+# the source file caddy-deb.sources for the servers and an index page. Only the newest
+# package is kept here; every package also stays attached to its GitHub release. Needs
+# apt-ftparchive (apt-utils) and gpg holding the private signing key, which must belong to
+# the public key caddy-deb.gpg in the repository.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -50,6 +51,24 @@ gpg --batch --yes --local-user "$secret_fpr" --armor --detach-sign \
 
 cp "$key_file" site/caddy-deb.gpg
 
+# The source file in deb822 format with the public key embedded in Signed-By, so that a
+# server needs one file and no separate keyring. sources.list(5): the key block goes in with
+# a leading space on every line and " ." for the empty line; apt supports embedded keys
+# since 2.3.10 (debian/changelog), i.e. Debian 12 and Ubuntu 22.04 on.
+{
+    echo "# caddy-deb: Caddy with plugins, https://github.com/MarcFauser/caddy-deb"
+    echo "# signing key $public_fpr"
+    echo "Types: deb"
+    echo "URIs: https://marcfauser.github.io/caddy-deb"
+    echo "Suites: $suite"
+    echo "Components: $component"
+    echo "Architectures: $arch"
+    echo "Signed-By:"
+    gpg --batch --armor --export "$public_fpr" | sed -e 's/^$/./' -e 's/^/ /'
+} > site/caddy-deb.sources
+grep -q -- '-----END PGP PUBLIC KEY BLOCK-----' site/caddy-deb.sources \
+    || { echo "FAIL: no key block in caddy-deb.sources" >&2; exit 1; }
+
 version="$(cat out/version.txt)"
 cat > site/index.html <<EOF
 <!doctype html>
@@ -60,8 +79,9 @@ cat > site/index.html <<EOF
 <p>apt repository with Caddy and the plugins listed in
 <a href="https://github.com/MarcFauser/caddy-deb/blob/main/main.go">main.go</a>.
 Current package: caddy $version (amd64).</p>
-<p>How to set up a server: <a href="https://github.com/MarcFauser/caddy-deb#on-a-server">README, "On a server"</a>.
-The instructions live only there, so that a correction does not need a new package.</p>
+<p>Source file for apt, with the signing key embedded:
+<a href="caddy-deb.sources">caddy-deb.sources</a>.
+How to set up a server: <a href="https://github.com/MarcFauser/caddy-deb#on-a-server">README, "On a server"</a>.</p>
 <p>Signing key fingerprint: $public_fpr</p>
 <p>Source and documentation: <a href="https://github.com/MarcFauser/caddy-deb">github.com/MarcFauser/caddy-deb</a></p>
 </body>

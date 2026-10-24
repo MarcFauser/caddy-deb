@@ -5,6 +5,21 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html). This is the version of the
 packaging; the package version follows Caddy (`<caddy version>-<run number>`).
 
+## [1.1.0] - 2026-10-25
+
+### Added
+
+- The Pages site offers `caddy-deb.sources`: the apt source in deb822 format with the
+  signing key embedded in `Signed-By`, so a server needs one file and no keyring. The README
+  sets up servers with it and says how to move from `caddy-deb.list` (which keeps working;
+  `caddy-deb.gpg` stays on the site). The test of the published repository installs through
+  it and checks that the embedded key is the key in `caddy-deb.gpg`.
+- `scripts/choose-package.sh` compares the new package with the published one (Go version,
+  modules with checksums, build flags, packaged files, maintainer scripts). If nothing
+  changed, the published package stays and no new revision or GitHub release appears, so the
+  servers neither install nor restart anything. A manual run can force a new revision with
+  the `new_revision` input.
+
 ## [1.0.4] - 2026-10-25
 
 ### Fixed

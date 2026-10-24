@@ -1,7 +1,8 @@
 #!/bin/bash
 # Installs caddy from the published repository exactly as the README tells a server to:
-# key, source line, apt update (checks the signature), apt install. Run as root on a
-# throwaway Debian or Ubuntu machine, from the repository folder:
+# the deb822 source file caddy-deb.sources with the embedded key, apt update (checks the
+# signature with that key alone, no keyring file is installed), apt install. Run as root on
+# a throwaway Debian or Ubuntu machine, from the repository folder:
 #   tests/repo-test.sh <repository URL> <expected package version>
 set -euo pipefail
 
@@ -13,9 +14,21 @@ expected="$2"
 export DEBIAN_FRONTEND=noninteractive
 
 apt-get update -q
-apt-get install -y -q curl ca-certificates
-curl -fsSL "$url/caddy-deb.gpg" -o /usr/share/keyrings/caddy-deb.gpg
-echo "deb [signed-by=/usr/share/keyrings/caddy-deb.gpg] $url stable main" > /etc/apt/sources.list.d/caddy-deb.list
+# gnupg only for the key check below; the README's way needs just curl and ca-certificates
+apt-get install -y -q curl ca-certificates gnupg
+curl -fsSL "$url/caddy-deb.sources" -o /etc/apt/sources.list.d/caddy-deb.sources
+cat /etc/apt/sources.list.d/caddy-deb.sources
+
+# The key embedded in the file must be the one committed in caddy-deb.gpg.
+expected_fpr="$(gpg --batch --show-keys --with-colons caddy-deb.gpg | awk -F: '$1 == "fpr" { print $10; exit }')"
+embedded_fpr="$(sed -n '/^Signed-By:/,$ { /^ /p }' /etc/apt/sources.list.d/caddy-deb.sources \
+    | sed -e 's/^ //' -e 's/^\.$//' \
+    | gpg --batch --show-keys --with-colons | awk -F: '$1 == "fpr" { print $10; exit }')"
+echo "embedded key: $embedded_fpr, committed key: $expected_fpr"
+[ -n "$expected_fpr" ] && [ "$embedded_fpr" = "$expected_fpr" ] \
+    || { echo "FAIL: the key in caddy-deb.sources is not the key in caddy-deb.gpg" >&2; exit 1; }
+[ ! -e /usr/share/keyrings/caddy-deb.gpg ] && [ ! -e /etc/apt/keyrings/caddy-deb.gpg ] \
+    || { echo "FAIL: a keyring file exists, the test would not show that the embedded key works" >&2; exit 1; }
 
 # GitHub Pages may need a moment until the new files are served everywhere
 for attempt in 1 2 3 4 5 6
