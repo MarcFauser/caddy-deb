@@ -5,6 +5,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html). This is the version of the
 packaging; the package version follows Caddy (`<caddy version>-<run number>`).
 
+## [1.0.3] - 2026-10-25
+
+### Changed
+
+- The server instructions in the README and on the Pages index page are written as root,
+  without `sudo` (not installed on a default Debian), and install `curl` and
+  `ca-certificates` first, which minimal installations lack. The index page now also removes
+  Caddy's own repository, like the README.
+
 ## [1.0.2] - 2026-10-24
 
 ### Fixed

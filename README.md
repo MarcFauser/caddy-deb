@@ -10,18 +10,23 @@ Caddy's own package file by file, so apt manages the binary that actually runs: 
 
 ## On a server
 
+As root:
+
 ```bash
-sudo curl -fsSL https://marcfauser.github.io/caddy-deb/caddy-deb.gpg -o /usr/share/keyrings/caddy-deb.gpg
-echo "deb [signed-by=/usr/share/keyrings/caddy-deb.gpg] https://marcfauser.github.io/caddy-deb stable main" | sudo tee /etc/apt/sources.list.d/caddy-deb.list
-sudo rm -f /etc/apt/sources.list.d/caddy-stable.list
-sudo apt update
-sudo apt install caddy
+apt install curl ca-certificates
+curl -fsSL https://marcfauser.github.io/caddy-deb/caddy-deb.gpg -o /usr/share/keyrings/caddy-deb.gpg
+echo "deb [signed-by=/usr/share/keyrings/caddy-deb.gpg] https://marcfauser.github.io/caddy-deb stable main" > /etc/apt/sources.list.d/caddy-deb.list
+rm -f /etc/apt/sources.list.d/caddy-stable.list
+apt update
+apt install caddy
 ```
 
-Remove Caddy's own repository (`caddy-stable.list` above): otherwise apt takes a new
-official version without plugins as soon as it is out and this repository's build is not
-yet. If [dpkg-caddy-cloudflare-hook](https://github.com/MarcFauser/dpkg-caddy-cloudflare-hook)
-is installed, remove it first (`sudo ./install.sh --uninstall` in its folder).
+The first line is for minimal installations, which have neither curl nor always
+ca-certificates. Remove Caddy's own repository (`caddy-stable.list` above): otherwise apt
+takes a new official version without plugins as soon as it is out and this repository's
+build is not yet. If
+[dpkg-caddy-cloudflare-hook](https://github.com/MarcFauser/dpkg-caddy-cloudflare-hook) is
+installed, remove it first (`./install.sh --uninstall` in its folder).
 
 After that, Caddy updates come with `apt upgrade` or unattended-upgrades like any other
 package. Configuration, service and paths are the same as with Caddy's package.
