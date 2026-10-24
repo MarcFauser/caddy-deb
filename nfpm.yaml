@@ -1,0 +1,54 @@
+# Package definition for nfpm (https://nfpm.goreleaser.com). It follows the "nfpms"
+# section of Caddy's own .goreleaser.yml (v2.11.7, lines 156-198), so that this package
+# replaces Caddy's package file by file: same name, same paths, same maintainer scripts
+# from caddyserver/dist. scripts/build.sh fills build/ and sets the variables.
+name: caddy
+arch: amd64
+platform: linux
+version: ${CADDY_VERSION}
+# Caddy's own package has no revision ("2.11.7"); "2.11.7-<run>" sorts above it, and a
+# newer build of the same Caddy version sorts above the older one.
+release: ${PKG_RELEASE}
+section: web
+priority: optional
+maintainer: Marc Fauser <297020273+MarcFauser@users.noreply.github.com>
+description: |
+  Caddy web server with plugins (${PLUGINS})
+  Caddy built from its own main.go plus the plugin imports, packaged like Caddy's
+  own Debian package by https://github.com/MarcFauser/caddy-deb ${PACKAGING_VERSION}.
+vendor: github.com/MarcFauser/caddy-deb
+homepage: https://github.com/MarcFauser/caddy-deb
+license: Apache-2.0
+
+provides:
+  - httpd
+
+contents:
+  - src: ./build/caddy
+    dst: /usr/bin/caddy
+    file_info:
+      mode: 0755
+
+  - src: ./build/dist/init/caddy.service
+    dst: /lib/systemd/system/caddy.service
+
+  - src: ./build/dist/init/caddy-api.service
+    dst: /lib/systemd/system/caddy-api.service
+
+  - src: ./build/dist/welcome/index.html
+    dst: /usr/share/caddy/index.html
+
+  - src: ./build/bash-completion
+    dst: /etc/bash_completion.d/caddy
+
+  - src: ./build/dist/config/Caddyfile
+    dst: /etc/caddy/Caddyfile
+    type: config
+
+  - src: ./build/man/*
+    dst: /usr/share/man/man8/
+
+scripts:
+  postinstall: ./build/dist/scripts/postinstall.sh
+  preremove: ./build/dist/scripts/preremove.sh
+  postremove: ./build/dist/scripts/postremove.sh

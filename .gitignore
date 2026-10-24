@@ -1,0 +1,6 @@
+# Scratch/working dir (local Go toolchain, probe builds)
+tmp/
+# build output of scripts/build.sh and scripts/publish.sh
+build/
+out/
+site/

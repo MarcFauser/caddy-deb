@@ -1,0 +1,18 @@
+# Dependabot watches go.mod: a new Caddy or plugin version becomes a pull request. The
+# build workflow tests it and merges it when the tests pass, then publishes from main.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: daily
+      time: "05:17"
+      timezone: Europe/Berlin
+    # Only Caddy and the plugins. Without this, Dependabot would also update every
+    # indirect requirement go.mod lists (its default: all explicitly defined dependencies),
+    # and each merge would publish a new package; the indirect versions come with Caddy.
+    allow:
+      - dependency-type: direct
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: deps

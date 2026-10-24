@@ -1,0 +1,169 @@
+name: build
+
+# Pull requests (also Dependabot's): build and test. Dependabot's pull requests are merged
+# when the tests pass. Pushes to main and manual runs: build, test, publish to GitHub Pages
+# and check the published repository.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # caddyserver/dist: systemd units, Caddyfile, welcome page and maintainer scripts
+  # (Apache-2.0), the same files Caddy's own package contains
+  DIST_REF: f94a1d2626835ff4157e85296fb8e4fa5500e0fb
+  NFPM_VERSION: v2.48.0
+
+jobs:
+  build:
+    name: build the package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          check-latest: true
+      - name: install nfpm
+        run: go install "github.com/goreleaser/nfpm/v2/cmd/nfpm@${NFPM_VERSION}"
+      - name: build
+        env:
+          PKG_RELEASE: ${{ github.run_number }}
+        run: bash scripts/build.sh
+      - uses: actions/upload-artifact@v7
+        with:
+          name: deb
+          path: out/
+          if-no-files-found: error
+
+  test:
+    name: install on ${{ matrix.image }}
+    needs: build
+    runs-on: ubuntu-24.04
+    container: ${{ matrix.image }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ['debian:12', 'debian:13', 'ubuntu:24.04']
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: deb
+          path: out
+      - run: bash tests/install-test.sh out/*.deb
+
+  test-systemd:
+    # Directly on the runner VM: systemd runs there, so Caddy really runs. The VM is thrown
+    # away after the job.
+    name: install with systemd (runner VM)
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: deb
+          path: out
+      - run: sudo bash tests/install-test.sh out/*.deb
+
+  merge:
+    name: merge the Dependabot update
+    needs: [test, test-systemd]
+    if: github.event_name == 'pull_request' && github.event.pull_request.user.login == 'dependabot[bot]'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    steps:
+      - name: merge, then start the publishing run on main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          gh pr merge --squash --delete-branch "$PR_URL"
+          # A push made with GITHUB_TOKEN starts no workflow run; workflow_dispatch does
+          # (GitHub docs, "Triggering a workflow from a workflow").
+          gh workflow run build.yml --ref main
+
+  publish:
+    name: publish to GitHub Pages
+    needs: [build, test, test-systemd]
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    concurrency:
+      group: publish
+      cancel-in-progress: false
+    outputs:
+      page_url: ${{ steps.deploy.outputs.page_url }}
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: deb
+          path: out
+      - id: version
+        run: echo "version=$(cat out/version.txt)" >> "$GITHUB_OUTPUT"
+      - name: import the signing key
+        env:
+          APT_SIGNING_KEY: ${{ secrets.APT_SIGNING_KEY }}
+        run: |
+          if [ -z "$APT_SIGNING_KEY" ]
+          then
+              echo "FAIL: the repository secret APT_SIGNING_KEY is missing, see README" >&2
+              exit 1
+          fi
+          printf '%s\n' "$APT_SIGNING_KEY" | gpg --batch --import
+      - name: build the repository
+        run: |
+          command -v apt-ftparchive >/dev/null || sudo apt-get install -y -q apt-utils
+          bash scripts/publish.sh
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: site
+      - id: deploy
+        uses: actions/deploy-pages@v5
+      - name: GitHub release with the package
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          # a re-run of the same run has the same version: replace the file then
+          if gh release view "v$VERSION" >/dev/null 2>&1
+          then
+              gh release upload "v$VERSION" out/*.deb --clobber
+          else
+              gh release create "v$VERSION" out/*.deb --target "$GITHUB_SHA" \
+                  --title "caddy $VERSION" \
+                  --notes "caddy $VERSION (amd64), built by run ${{ github.run_number }} from $GITHUB_SHA."
+          fi
+
+  verify:
+    name: install from the published repository
+    needs: publish
+    runs-on: ubuntu-24.04
+    container: debian:13
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - run: bash tests/repo-test.sh "${{ needs.publish.outputs.page_url }}" "${{ needs.publish.outputs.version }}"
