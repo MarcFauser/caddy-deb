@@ -5,6 +5,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html). This is the version of the
 packaging; the package version follows Caddy (`<caddy version>-<run number>`).
 
+## [1.3.0] - 2026-10-25
+
+### Added
+
+- A weekly run (`weekly.yml`, Friday 04:37 UTC) starts the build on `main`, so a new Go
+  release reaches the package within a week; before, it waited for the next Caddy or plugin
+  update. The build publishes a new revision only if the package changed, which a new Go
+  version does. It is a workflow of its own: GitHub disables a scheduled workflow after
+  60 days without repository activity, and that must not stop the build with Dependabot's
+  updates. The README says how to check and re-enable it.
+
 ## [1.2.0] - 2026-10-25
 
 ### Added

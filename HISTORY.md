@@ -93,3 +93,22 @@ The repository test now walks through the way back exactly as the README describ
 install the oldest offered version, hold it, check that `apt-get upgrade` keeps it, release
 the hold and check that the upgrade brings the newest back. Non-interactively that needs
 `--allow-downgrades`; interactively apt asks instead (apt-private/private-install.cc).
+
+## 2026-10-25 - a weekly run for Go
+
+Every build takes the newest stable Go, but nothing started a build when only Go changed:
+Dependabot watches `go.mod`, not the Go releases, so a Go security fix waited for the next
+Caddy or plugin update. An own schedule had been turned down at the start, when every run
+published a new revision that every server installed. Since 1.1.0 a run publishes only when
+the package changed, and the Go version is part of that comparison (`caddy build-info`
+starts with it), so a weekly run costs the servers nothing in a week without a new Go.
+
+Friday 04:37 UTC: the 54 Go releases since January 2025 came out on Tuesdays (25),
+Thursdays (14), Wednesdays (11) and Mondays (4), so Friday morning catches each week's
+release, and the minute keeps clear of the full hour, when GitHub delays scheduled runs.
+
+The schedule lives in its own workflow, `weekly.yml`, which only starts `build.yml`. GitHub
+disables a scheduled workflow in a public repository after 60 days without repository
+activity, and a disabled workflow is not started by anything. In `build.yml` a quiet stretch
+without Caddy or plugin updates would therefore also have stopped the builds of Dependabot's
+next update; now it can stop only the weekly start.

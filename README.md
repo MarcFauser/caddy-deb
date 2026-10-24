@@ -111,7 +111,7 @@ with `apt install ./caddy_<version>_amd64.deb`. Caddy's own package is no way ba
 the plugins, and Caddy refuses a configuration that uses a missing module ("module not
 registered").
 
-## How a new Caddy version gets here
+## How a new Caddy version or a new Go gets here
 
 1. Dependabot checks `go.mod` daily (05:17 Europe/Berlin) and opens a pull request when
    Caddy or a plugin has a new version.
@@ -122,6 +122,13 @@ registered").
    which builds again, signs and publishes the repository on GitHub Pages, attaches the
    package to a GitHub release, and installs it from the published repository once more,
    including going back to the oldest offered version and up again.
+
+**A new Go** comes with the weekly run: `weekly.yml` starts the build on `main` every
+Friday at 04:37 UTC (Go has released on Mondays to Thursdays since 2025). Every build takes
+the newest stable Go, and Dependabot watches `go.mod`, not Go itself, so without this run a
+new Go would wait for the next Caddy or plugin update. The Go version is part of the package
+comparison below, so the weekly run publishes a new revision only when Go (or anything else
+in the package) changed; in other weeks it publishes nothing.
 
 Not waiting for the daily check: in the repository, *Insights → Dependency graph →
 Dependabot → Recent update jobs → Check for updates*. To rebuild with the current
@@ -171,9 +178,8 @@ workflow. [nfpm](https://nfpm.goreleaser.com) packages it (`nfpm.yaml`), followi
 
 Go is the newest stable release at build time (`setup-go` with `go-version: stable` and
 `check-latest: true`); `go.mod` only sets the minimum. `caddy build-info` on a server shows
-the Go version and every module. A new Go release alone starts no build: it comes with the
-next Caddy or plugin update, or with a manual run (which publishes a new revision because
-the Go version changed).
+the Go version and every module. A new Go release reaches the servers through the weekly run
+(see above), at the latest a week later.
 
 `scripts/build.sh` builds, `scripts/choose-package.sh` decides between the new and the
 published package, `scripts/fetch-older.sh` fetches the earlier versions from the GitHub
@@ -198,6 +204,14 @@ the new `caddy-deb.sources`.
   GitHub release.
 - Right after a publish, GitHub Pages can serve old and new files for a short while; an
   `apt update` in that window may fail and work on the next try.
+- GitHub disables a scheduled workflow in a public repository after 60 days without
+  repository activity. That can hit `weekly.yml` in a long stretch without Caddy or plugin
+  updates; the build itself has no schedule and is not affected. Check with
+  `gh workflow list --all --repo MarcFauser/caddy-deb`, switch it back on with
+  `gh workflow enable weekly.yml --repo MarcFauser/caddy-deb`.
+- If a run builds an older commit and a newer package is published meanwhile (a weekly run
+  overtaken by a Caddy update), `scripts/fetch-older.sh` refuses to publish below it and the
+  run fails without changing the repository.
 
 ## Development
 
