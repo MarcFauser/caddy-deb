@@ -76,8 +76,40 @@ apt-cache policy caddy
 below). Debian's own, much older `caddy` may appear; its version is lower, so apt does not
 choose it.
 
-After that, Caddy updates come with `apt upgrade` or unattended-upgrades like any other
-package. Configuration, service and paths are the same as with Caddy's package.
+After that, apt offers every Caddy update like any other package, and `apt upgrade` installs
+it. Configuration, service and paths are the same as with Caddy's package.
+
+## Automatic updates with unattended-upgrades
+
+unattended-upgrades does **not** install packages from this repository on its own. Debian's
+default configuration only allows Debian's own origins (`origin=Debian` with the label
+`Debian` or `Debian-Security`), and this repository's Release file says
+`Origin: caddy-deb`. The same was true for Caddy's own repository.
+
+For automatic Caddy updates, allow the repository in a file of its own, as root. Do not edit
+`50unattended-upgrades`: it belongs to the unattended-upgrades package, which merges it with
+`ucf` on its updates. A second `Origins-Pattern` block adds to the list instead of replacing
+it (apt.conf(5)).
+
+```bash
+cat > /etc/apt/apt.conf.d/52unattended-upgrades-caddy-deb <<'EOF'
+Unattended-Upgrade::Origins-Pattern {
+        "origin=caddy-deb,codename=stable";
+};
+EOF
+```
+
+Check it without installing anything:
+
+```bash
+unattended-upgrades --dry-run -d 2>&1 | grep -e 'Allowed origins' -e 'Packages that will be upgraded'
+```
+
+`Allowed origins are:` must list `origin=caddy-deb,codename=stable`; if a newer caddy is
+waiting, `Packages that will be upgraded:` names it. unattended-upgrades has to be switched
+on for any of this (`APT::Periodic::Unattended-Upgrade "1";`, usually in
+`/etc/apt/apt.conf.d/20auto-upgrades`). Each update restarts a running Caddy (the package's
+postinst runs `try-restart`, as in Caddy's own package).
 
 ## Going back to an earlier version
 
@@ -97,7 +129,8 @@ apt-mark hold caddy
 ```
 
 apt lists the package under "DOWNGRADED" and asks before going ahead. The hold keeps
-`apt upgrade` and unattended-upgrades from installing the newest version again. Once a fixed
+`apt upgrade` and, if set up as above, unattended-upgrades from installing the newest version
+again. Once a fixed
 version is out:
 
 ```bash

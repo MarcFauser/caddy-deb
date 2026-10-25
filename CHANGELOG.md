@@ -5,6 +5,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html). This is the version of the
 packaging; the package version follows Caddy (`<caddy version>-<run number>`).
 
+## [1.3.1] - 2026-10-25
+
+### Fixed
+
+- The README said Caddy updates come with unattended-upgrades like any other package. They
+  do not: Debian's default configuration only allows `origin=Debian`, and this repository is
+  `Origin: caddy-deb`, so updates were only offered and waited for `apt upgrade`. A new
+  section shows how to allow the repository in a file of its own
+  (`/etc/apt/apt.conf.d/52unattended-upgrades-caddy-deb`, not the package's
+  `50unattended-upgrades`) and how to check it with `unattended-upgrades --dry-run -d`.
+  No change to the package or the workflow.
+
 ## [1.3.0] - 2026-10-25
 
 ### Added
