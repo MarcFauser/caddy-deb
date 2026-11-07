@@ -5,6 +5,25 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html). This is the version of the
 packaging; the package version follows Caddy (`<caddy version>-<run number>`).
 
+## [1.4.0] - 2026-11-07
+
+### Changed
+
+- Dependabot checks every day at 05:17 Europe/Berlin, weekends included (`interval: cron`).
+  `interval: daily` runs Monday to Friday only, so Caddy 2.11.9 (out on a Thursday) would
+  have waited for Monday.
+- A new Caddy is taken without waiting; third-party plugins keep GitHub's default cooldown of
+  3 days, now written out in `dependabot.yml`. Before, Caddy waited 3 days as well.
+
+### Fixed
+
+- The install test installed the newest of Caddy's own packages and then this package on
+  top. Whenever Caddy had released and Dependabot still held the update back, that was a
+  downgrade, apt refused it, and every build failed, as the weekly run did on 2026-11-06
+  (2.11.7-11 over Caddy's 2.11.9). It now installs Caddy's own package of the same Caddy
+  version and stops with a clear message if Caddy's repository does not offer it.
+- The README said Dependabot checks daily, without saying that `daily` means weekdays.
+
 ## [1.3.1] - 2026-10-25
 
 ### Fixed

@@ -112,3 +112,26 @@ disables a scheduled workflow in a public repository after 60 days without repos
 activity, and a disabled workflow is not started by anything. In `build.yml` a quiet stretch
 without Caddy or plugin updates would therefore also have stopped the builds of Dependabot's
 next update; now it can stop only the weekly start.
+
+## 2026-11-07 - Caddy 2.11.8 and 2.11.9, and three things that held them back
+
+Caddy released 2.11.8 on 2026-11-04 and 2.11.9 a day later. Three days after that, neither
+had arrived, for three separate reasons.
+
+Dependabot applies a cooldown of 3 days to version updates by default, even with no
+`cooldown` in the configuration (GitHub documents it; security updates are exempt). Its log
+said so plainly: "Days since release: 0 (cooldown days: 3)". The waiting is counted in
+seconds from the release date in the Go module proxy. For a small third-party plugin that
+protection is worth having; for Caddy, which this repository exists to deliver, the owner
+decided to take a new version the same morning. `exclude` does that per dependency;
+`semver-patch-days: 0` would not have, because a 0 falls back to the default days.
+
+`interval: daily` runs Monday to Friday only, which the README did not say and which was
+assumed away when the arrival of 2.11.8 was predicted for a Saturday. Dependabot now runs on
+a cron schedule, every day at 05:17.
+
+And the weekly run on 2026-11-06 failed. The install test first installed the newest of
+Caddy's own packages, which was 2.11.9 by then, and then this package, still 2.11.7, on top:
+a downgrade, which `apt-get -y` refuses. The same would have blocked a Dependabot pull
+request for 2.11.8 once Caddy's repository already had 2.11.9. The test is about replacing
+Caddy's package file by file, so it now installs Caddy's package of the same version.

@@ -1,7 +1,7 @@
 #!/bin/bash
 # Installs the built package on a throwaway Debian or Ubuntu machine the way a server
-# switches over: first Caddy's own package from Caddy's apt repository, then this package
-# on top of it. Checks the version, the plugins, dpkg --verify, the files and, where
+# switches over: first Caddy's own package of the same Caddy version from Caddy's apt
+# repository, then this package on top of it. Checks the version, the plugins, dpkg --verify, the files and, where
 # systemd runs, that Caddy runs the new binary. Run as root, from the repository folder:
 #   tests/install-test.sh out/caddy_<version>_amd64.deb
 set -euo pipefail
@@ -27,14 +27,27 @@ fail()
     exit 1
 }
 
-step "Caddy's own package from Caddy's apt repository (caddyserver.com/docs/install)"
+# The same Caddy version, not the newest: the test is about replacing Caddy's package file by
+# file. Whenever Caddy has released and Dependabot's cooldown still holds the update back, the
+# newest one is higher than this package, installing this package on top is a downgrade, and
+# apt-get -y refuses it (run 11, 2026-11-06: 2.11.7-11 over Caddy's 2.11.9).
+upstream="${expected%-*}"
+step "Caddy's own caddy $upstream from Caddy's apt repository (caddyserver.com/docs/install)"
 apt-get update -q
 apt-get install -y -q curl gnupg ca-certificates
 curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
 curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' > /etc/apt/sources.list.d/caddy-stable.list
 chmod o+r /usr/share/keyrings/caddy-stable-archive-keyring.gpg /etc/apt/sources.list.d/caddy-stable.list
 apt-get update -q
-apt-get install -y -q caddy
+# captured first: with pipefail, a reader that stops early can turn a hit into a miss
+offered="$(apt-cache madison caddy)"
+if ! awk -F'|' -v want="$upstream" '{ gsub(/[[:space:]]/, "", $2) } $2 == want { found = 1 } END { exit !found }' <<< "$offered"
+then
+    printf '%s\n' "$offered"
+    fail "Caddy's repository does not offer caddy $upstream"
+fi
+apt-get install -y -q "caddy=$upstream"
+[ "$(dpkg-query -W -f='${Version}' caddy)" = "$upstream" ] || fail "Caddy's own caddy $upstream is not installed"
 echo "installed: caddy $(dpkg-query -W -f='${Version}' caddy)"
 
 step "this package on top: $deb ($expected)"

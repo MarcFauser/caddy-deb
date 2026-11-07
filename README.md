@@ -146,11 +146,14 @@ registered").
 
 ## How a new Caddy version or a new Go gets here
 
-1. Dependabot checks `go.mod` daily (05:17 Europe/Berlin) and opens a pull request when
-   Caddy or a plugin has a new version.
+1. Dependabot checks `go.mod` every day at 05:17 Europe/Berlin, weekends included, and
+   opens a pull request when Caddy or a plugin has a new version. A new Caddy is taken the
+   same morning; a new plugin version only after 3 days (`cooldown` in
+   `.github/dependabot.yml`), a protection against a bad release of a small third-party
+   module. Security updates are never held back.
 2. The workflow builds the package and installs it in Debian 12, Debian 13 and
    Ubuntu 24.04 containers and on a runner VM with systemd, each time over Caddy's own
-   package.
+   package of the same Caddy version.
 3. If all tests pass, the workflow merges the pull request and starts a run on `main`,
    which builds again, signs and publishes the repository on GitHub Pages, attaches the
    package to a GitHub release, and installs it from the published repository once more,

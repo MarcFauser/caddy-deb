@@ -4,10 +4,20 @@ version: 2
 updates:
   - package-ecosystem: gomod
     directory: /
+    # Every day at 05:17, weekends included: "daily" would mean Monday to Friday only
+    # (dependabot-options-reference, schedule.interval).
     schedule:
-      interval: daily
-      time: "05:17"
+      interval: cron
+      cronjob: "17 5 * * *"
       timezone: Europe/Berlin
+    # Caddy itself without waiting; third-party plugins after 3 days. 3 is GitHub's default
+    # cooldown for version updates, written out because a default can change. Security
+    # updates are never held back. semver-patch-days: 0 would not exempt anything: a 0 falls
+    # back to default-days (dependabot-core, package/release_cooldown_options.rb).
+    cooldown:
+      default-days: 3
+      exclude:
+        - github.com/caddyserver/caddy/v2
     # Only Caddy and the plugins. Without this, Dependabot would also update every
     # indirect requirement go.mod lists (its default: all explicitly defined dependencies),
     # and each merge would publish a new package; the indirect versions come with Caddy.
