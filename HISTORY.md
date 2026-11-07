@@ -135,3 +135,10 @@ Caddy's own packages, which was 2.11.9 by then, and then this package, still 2.1
 a downgrade, which `apt-get -y` refuses. The same would have blocked a Dependabot pull
 request for 2.11.8 once Caddy's repository already had 2.11.9. The test is about replacing
 Caddy's package file by file, so it now installs Caddy's package of the same version.
+
+The run that was to publish 2.11.9 (build #14) then failed on GitHub's side: the Pages
+deployment stayed at `syncing_files` for ten minutes and was cancelled. The error message asks
+to re-run the deployment, and that cannot work here: a re-run keeps the earlier attempt's
+artifact in the run, uploads a second one of the same name, and `deploy-pages` refuses two.
+Since 1.4.1 each attempt names its own artifact. 2.11.9 comes from the next run instead, with
+that run's number as its revision; revision 14 never existed outside build #14.

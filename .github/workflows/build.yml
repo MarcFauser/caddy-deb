@@ -172,11 +172,18 @@ jobs:
           bash scripts/publish.sh
       - id: offered
         run: echo "offered=$(paste -sd ' ' out/offered-versions.txt)" >> "$GITHUB_OUTPUT"
+      # One artifact name per attempt: a re-run keeps the artifact of the earlier attempt in the
+      # run, and deploy-pages refuses two of the same name ("Multiple artifacts named
+      # github-pages", build #14 on 2026-11-07). Both steps are in this job, so they always see
+      # the same attempt.
       - uses: actions/upload-pages-artifact@v5
         with:
+          name: github-pages-${{ github.run_attempt }}
           path: site
       - id: deploy
         uses: actions/deploy-pages@v5
+        with:
+          artifact_name: github-pages-${{ github.run_attempt }}
       - name: GitHub release with the package
         # a kept package already has its release
         if: steps.choose.outputs.reused == 'false'

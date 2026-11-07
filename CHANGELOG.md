@@ -5,6 +5,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html). This is the version of the
 packaging; the package version follows Caddy (`<caddy version>-<run number>`).
 
+## [1.4.1] - 2026-11-07
+
+### Fixed
+
+- A failed publishing job could not be re-run. The Pages artifact of the first attempt stays
+  in the run, the re-run uploaded a second one with the same name, and `deploy-pages` refused
+  both ("Multiple artifacts named github-pages", build #14, which never published caddy
+  2.11.9-14). The artifact is now named per attempt (`github-pages-<attempt>`) on both sides.
+  No change to the package.
+
 ## [1.4.0] - 2026-11-07
 
 ### Changed
