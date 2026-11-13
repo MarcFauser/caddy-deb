@@ -5,6 +5,25 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html). This is the version of the
 packaging; the package version follows Caddy (`<caddy version>-<run number>`).
 
+## [3.1.0] - 2026-11-13
+
+### Added
+
+- `Update-Caddy.ps1 -SkipSignatureCheck`: installs without checking the signature, for builds
+  that are no longer signed on purpose.
+
+### Changed
+
+- `Update-Caddy.ps1` checks signatures by default: `-SignerEku` defaults to the profile
+  `fauser-public` (`1.3.6.1.4.1.311.97.148201039.430108475.907146009.557048314`, first signed
+  in build #22), and an empty value is no longer accepted.
+- The refusals say what to do: another profile names the file's profile EKU for a one-time
+  `-SignerEku`, an unsigned file names `-SkipSignatureCheck`, and a file changed after signing
+  is refused with "do not install it" and no way past it.
+- The Windows test runs the update checks of a signed build with the script's default, fails
+  a publishing run whose build is not signed or not signed through the trusted profile, and
+  checks the advice in the refusals.
+
 ## [3.0.2] - 2026-11-13
 
 ### Changed

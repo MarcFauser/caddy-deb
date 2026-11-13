@@ -212,9 +212,13 @@ back. A stopped service stays stopped, as with apt. It refuses to touch a servic
 a `caddy.exe` from another folder, and a `caddy.exe` from its folder that runs outside the
 service. Every run writes a line to `C:\caddy\update-caddy.log` (times in UTC); exit code 0
 means installed or already current. `Get-Help C:\caddy\Update-Caddy.ps1 -Full` lists the
-options, among them `-HealthUrl` for an address that must answer after the start. Once the
-build is signed (see [Code signing](#code-signing)), the script also checks the signature of
-the new `caddy.exe` before it runs or installs it.
+options, among them `-HealthUrl` for an address that must answer after the start.
+
+Since caddy-deb 3.1.0 the script also checks the signature of the new `caddy.exe` before it
+runs or installs it (see [Code signing](#code-signing)): signed by FAUSER AG through the
+Artifact Signing profile it trusts, else it refuses with exit code 1, and the line in the log
+says why and what to do. An `Update-Caddy.ps1` from an earlier zip does not check signatures;
+copy the new one (the script does not replace itself).
 
 The installed version is the file's own: `(Get-Item C:\caddy\caddy.exe).VersionInfo.FileVersion`.
 A `caddy.exe` from elsewhere (Caddy's download page, or `caddy upgrade`, which fetches a build
@@ -366,29 +370,40 @@ On GitHub:
    `gh variable set NAME --repo MarcFauser/caddy-deb --body VALUE` with a token that may write
    variables). None of them is a credential.
 
-`ARTIFACT_SIGNING_PROFILE` switches signing on; deleting it switches it off again.
+`ARTIFACT_SIGNING_PROFILE` switches signing on. Publishing runs need it: the Windows test
+fails a publishing run whose build is not signed, because the servers' `Update-Caddy.ps1`
+would refuse it (see below for switching signing off on purpose).
 
-**The first signed release:** run the workflow with *new_revision* (`gh workflow run build.yml
---repo MarcFauser/caddy-deb -f new_revision=true`): an unchanged package keeps its release,
-and the zip with it. The servers get the same package once more, with one Caddy restart.
+**Which signer the script trusts.** Artifact Signing renews its certificates daily, each
+valid for 72 hours, so neither a certificate nor its thumbprint stays the same. What stays is
+an EKU of the form `1.3.6.1.4.1.311.97.<numbers>` that every certificate of one profile
+carries (Microsoft, "Artifact Signing certificate management"); the signing job prints it in
+its summary. For `fauser-public` it is
+`1.3.6.1.4.1.311.97.148201039.430108475.907146009.557048314` (first signed in build #22), the
+default of `-SignerEku` in `windows/Update-Caddy.ps1` since 3.1.0. The script installs only a
+`caddy.exe` with a valid, timestamped signature from that profile, issued under Microsoft's
+root for Artifact Signing, and checks that before it runs the file. Because `fauser-public`
+also signs FAUSER AG's own software, this says "signed by FAUSER AG through that profile", not
+"built by this repository"; that the file is this repository's build is what the SHA-256
+digest of the release, the file version and `caddy.exe version` check.
 
-**Pinning the signer.** Artifact Signing renews its certificates daily, each valid for 72
-hours, so neither a certificate nor its thumbprint stays the same. What stays is an EKU of
-the form `1.3.6.1.4.1.311.97.<numbers>` that every certificate of one profile carries
-(Microsoft, "Artifact Signing certificate management"). The signing job prints it in its
-summary. Set it as the default of `-SignerEku` in `windows/Update-Caddy.ps1`; from the next
-release on, the script in the zip installs only a `caddy.exe` with a valid, timestamped
-signature from that profile, issued under Microsoft's root for Artifact Signing, and checks
-that before it runs the file. Copy that `Update-Caddy.ps1` onto the Windows servers (the
-script does not replace itself). A run that would publish an unsigned build with a pinning
-script fails in the Windows test. Because `fauser-public` also signs FAUSER AG's own software,
-the pin says "signed by FAUSER AG through that profile", not "built by this repository"; that
-the file is this repository's build is what the SHA-256 digest of the release, the file
-version and `caddy.exe version` check.
+When a signature does not fit, the script refuses with exit code 1 and the log line says what
+to do:
 
-If the certificate profile is deleted and created again, it gets a new EKU: set the new one,
-publish, and copy the script again; until then the servers refuse the updates and log why.
-To install an unsigned build anyway, pass `-SignerEku ''`.
+| The new `caddy.exe` | the refusal says |
+|---|---|
+| is signed through another Artifact Signing profile | that profile's EKU: if the profile was changed on purpose, run once with `-SignerEku <that EKU>`, then use the `Update-Caddy.ps1` of the new zip |
+| is not signed | if the builds are no longer signed on purpose, run once with `-SkipSignatureCheck` |
+| was changed after it was signed | do not install it (no way past it is offered) |
+
+**Changing the profile on purpose** (a new profile gets a new EKU, also when one is deleted
+and created again): commit the new EKU as the default of `-SignerEku` before the next
+publishing run (the Windows test fails while the build's profile is not the one the script
+trusts; its log names the build's EKU), publish, and copy the new `Update-Caddy.ps1` onto the
+servers; on each server, the first update needs `-SignerEku <new EKU>` once, or the new
+script. **Switching signing off on purpose:** that needs a change of the Windows test and of
+the script's default, not only deleting the variable; the servers then update once with
+`-SkipSignatureCheck` or the new script.
 
 Check a signature on Windows:
 
@@ -399,10 +414,9 @@ Get-AuthenticodeSignature C:\caddy\caddy.exe | Format-List Status, SignerCertifi
 ## Limits
 
 - amd64 only.
-- On Windows, `caddy.exe` has no code signature until [code signing](#code-signing) is set
-  up. Until then, what the update script installs is checked against the SHA-256 digest
-  GitHub records for the release file, fetched over HTTPS from GitHub's API; that proves it
-  is the file in this repository's release, not who built it.
+- On Windows, `caddy.exe` of releases before the first signed one has no code signature, and
+  an `Update-Caddy.ps1` older than 3.1.0 checks only the SHA-256 digest GitHub records for the
+  release file; that proves it is the file in this repository's release, not who signed it.
 - The Pages site keeps the newest package and the four highest earlier versions (18 MB
   each, against GitHub Pages' 1 GB per site); every package also stays attached to its
   GitHub release.

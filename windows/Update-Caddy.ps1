@@ -17,10 +17,11 @@
     download, "caddy upgrade") has a lower or no file version and is replaced by the next
     release.
 
-    With -SignerEku, the new caddy.exe must also carry a valid, timestamped Authenticode
-    signature from that Azure Artifact Signing certificate profile, checked before it is run
-    or installed. The SHA-256 digest only shows that the zip is the file in the release; the
-    signature shows who built it.
+    The new caddy.exe must also carry a valid, timestamped Authenticode signature from the
+    Azure Artifact Signing certificate profile that signs this repository's builds
+    (-SignerEku), checked before it is run or installed; otherwise the script refuses and
+    says why. The SHA-256 digest only shows that the zip is the file in the release; the
+    signature shows who signed it. -SkipSignatureCheck installs without that check.
 
     Like apt's try-restart: a service that was stopped stays stopped. Without a service of
     that name the script only puts caddy.exe into the folder (first installation). It
@@ -58,7 +59,13 @@
     cannot be pinned; every certificate of one profile carries that profile's EKU. The
     signature must be valid for Windows, timestamped, carry the Public Trust EKU
     1.3.6.1.4.1.311.97.1.0 and lead to Microsoft's Identity Verification Root Certificate
-    Authority 2020. Empty: caddy.exe is not checked for a signature.
+    Authority 2020. Default: the profile fauser-public of FAUSER AG, which signs this
+    repository's builds. If the signing profile changes, run once with the new profile's EKU
+    (the refusal names it) and then use the Update-Caddy.ps1 of the new zip.
+
+.PARAMETER SkipSignatureCheck
+    Install caddy.exe without checking its signature, for example if the builds are no longer
+    signed. The zip is still checked against its SHA-256 digest.
 
 .PARAMETER StartTimeoutSeconds
     How long the service may take to report "running" after the start.
@@ -88,9 +95,12 @@ param(
 
     [string] $HealthUrl,
 
-    # Empty until the Windows build is signed; then the profile of build.yml's signing job.
-    [ValidatePattern('^(1\.3\.6\.1\.4\.1\.311\.97\.\d+(\.\d+)+)?$')]
-    [string] $SignerEku = '',
+    # The Artifact Signing profile fauser-public, read from the signatures of build #22
+    # (2026-11-13); README, "Code signing".
+    [ValidatePattern('^1\.3\.6\.1\.4\.1\.311\.97\.\d+(\.\d+)+$')]
+    [string] $SignerEku = '1.3.6.1.4.1.311.97.148201039.430108475.907146009.557048314',
+
+    [switch] $SkipSignatureCheck,
 
     [ValidateRange(5, 600)]
     [int] $StartTimeoutSeconds = 60,
@@ -213,9 +223,26 @@ function Assert-Signature([string] $Path)
 {
     $name = Split-Path -Leaf $Path
     $signature = Get-AuthenticodeSignature -LiteralPath $Path
-    if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid)
+    # The advice in each refusal names a way past it only where passing may be right: never
+    # for a file that was changed after it was signed.
+    switch ($signature.Status)
     {
-        throw "$name has no valid signature ($($signature.Status): $($signature.StatusMessage))"
+        ([System.Management.Automation.SignatureStatus]::Valid)
+        {
+            break
+        }
+        ([System.Management.Automation.SignatureStatus]::NotSigned)
+        {
+            throw "$name is not signed. If this repository's builds are no longer signed on purpose (README, `"Code signing`"), run once with -SkipSignatureCheck."
+        }
+        ([System.Management.Automation.SignatureStatus]::HashMismatch)
+        {
+            throw "$name was changed after it was signed (HashMismatch); do not install it."
+        }
+        default
+        {
+            throw "$name has no valid signature ($($signature.Status): $($signature.StatusMessage))"
+        }
     }
     # The certificate is valid for 72 hours; only a timestamp keeps the signature valid after that.
     if ($null -eq $signature.TimeStamperCertificate)
@@ -229,7 +256,13 @@ function Assert-Signature([string] $Path)
             ForEach-Object { [string]$_.Value })
     if ($ekus -cnotcontains $codeSigningEku -or $ekus -cnotcontains $publicTrustEku -or $ekus -cnotcontains $SignerEku)
     {
-        throw "the signature of $name is from '$($certificate.Subject)' with the EKUs $($ekus -join ', '), not from the Artifact Signing profile $SignerEku"
+        $message = "the signature of $name is from '$($certificate.Subject)' with the EKUs $($ekus -join ', '), not from the Artifact Signing profile $SignerEku that this script trusts."
+        $profiles = @($ekus | Where-Object { $_.StartsWith('1.3.6.1.4.1.311.97.', [StringComparison]::Ordinal) -and $_ -cne $publicTrustEku })
+        if ($ekus -ccontains $codeSigningEku -and $ekus -ccontains $publicTrustEku -and $profiles.Count -eq 1)
+        {
+            $message += " If the signing profile was changed on purpose (README, `"Code signing`"), run once with -SignerEku $($profiles[0]) and then use the Update-Caddy.ps1 of the new zip."
+        }
+        throw $message
     }
     # The chain from the certificates in the signature itself, so that it does not depend on
     # what this machine has cached. The signing certificate has expired after 72 hours.
@@ -445,7 +478,11 @@ function Invoke-Update
             throw "$($target.Name) holds no caddy.exe"
         }
         # before caddy.exe runs below
-        if ($SignerEku)
+        if ($SkipSignatureCheck)
+        {
+            Write-UpdateLog 'not checking the signature of caddy.exe (-SkipSignatureCheck)'
+        }
+        else
         {
             Assert-Signature $newExe
         }

@@ -205,7 +205,7 @@ jobs:
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          # a publishing run: an unsigned build must not go out with a script that pins a signer
+          # a publishing run: the build must be signed, Update-Caddy.ps1 refuses unsigned ones
           PUBLISHING: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
         run: ./tests/windows-test.ps1 -OutDir out -Publishing:($env:PUBLISHING -eq 'true')
 

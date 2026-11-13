@@ -227,3 +227,12 @@ repository's IDs in the subject (`repo:MarcFauser@297020273/caddy-deb@1431913361
 this repository is from October. The subject first written into the README, in the old
 format without IDs, would have made every login fail. The Azure form asks for the IDs by now,
 and the repository's OIDC settings (`actions/oidc/customization/sub`) state the prefix.
+
+Build #22 on `main` signed for the first time, both files, and showed the profile's EKU. 3.1.0
+makes it the default the update script trusts, so that the first signed release also carries
+a script that insists on the signature, and the servers restart Caddy once for both. The
+owner asked for a refusal with an error message and a way past it for when the key changes
+or goes away. The way past depends on the refusal: a different Artifact Signing profile can
+be trusted once by its EKU, which the message names; an unsigned file can be installed with
+`-SkipSignatureCheck`; a file that was changed after it was signed gets no way past it in the
+message, because the advice in a refusal is what gets followed in a hurry.
