@@ -5,6 +5,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html). This is the version of the
 packaging; the package version follows Caddy (`<caddy version>-<run number>`).
 
+## [3.0.1] - 2026-11-13
+
+### Fixed
+
+- `tests/windows-test.ps1` passed and still ended with exit code 1: GitHub's `pwsh` step exits
+  with `$LASTEXITCODE` when it is set, and the last update run of the new signature tests fails
+  on purpose. The script now ends with `exit 0` after "Windows test passed" (build #20 on the
+  branch `code-signing`; 3.0.0 was not published).
+
 ## [3.0.0] - 2026-11-13
 
 ### Added

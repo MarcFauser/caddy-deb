@@ -457,3 +457,6 @@ finally
 
 Write-Host ''
 Write-Host 'Windows test passed'
+# GitHub's pwsh wrapper exits with $LASTEXITCODE if it is set, and the last update run above
+# fails on purpose (build #20: "Windows test passed", then exit code 1)
+exit 0
