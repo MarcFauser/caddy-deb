@@ -7,7 +7,12 @@ name: build
 # otherwise the published package stays and the servers have nothing to install. The
 # repository also offers earlier versions from the GitHub releases (KEEP_VERSIONS in total,
 # scripts/fetch-older.sh) for going back. Every release also carries the Windows build as a
-# zip, which windows/Update-Caddy.ps1 installs on Windows servers.
+# zip, which windows/Update-Caddy.ps1 installs on Windows servers. Once the repository
+# variables for Azure Artifact Signing are set (README, "Code signing"), publishing runs sign
+# caddy.exe and Update-Caddy.ps1 before they are tested and released.
+#
+# Jobs after one that may be skipped (sign-windows) name the results they need: with GitHub's
+# implicit success(), a skipped job also skips the jobs after it.
 on:
   push:
     branches: [main]
@@ -102,11 +107,83 @@ jobs:
           path: out
       - run: sudo bash tests/install-test.sh out/*.deb
 
+  sign-windows:
+    # Azure Artifact Signing, in publishing runs and only once ARTIFACT_SIGNING_PROFILE is set.
+    # The login is OpenID Connect: Azure trusts a token for the environment code-signing,
+    # which only main may use (README, "Code signing"); there is no secret to leak. Pull
+    # requests, Dependabot's included, never get here.
+    name: sign the Windows build
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && vars.ARTIFACT_SIGNING_PROFILE != ''
+    runs-on: windows-2025
+    timeout-minutes: 20
+    environment: code-signing
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: deb
+          path: out
+      - id: unpack
+        name: unpack the Windows zip
+        shell: pwsh
+        run: |
+          $zips = @(Get-ChildItem -LiteralPath out -File | Where-Object { $_.Name -match '^caddy_.+_windows_amd64\.zip$' })
+          if ($zips.Count -ne 1) { throw "expected one Windows zip in out, found $($zips.Count)" }
+          Expand-Archive -LiteralPath $zips[0].FullName -DestinationPath windows-sign
+          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding utf8NoBOM -Value "folder=$((Resolve-Path -LiteralPath windows-sign).ProviderPath)", "zip=$($zips[0].Name)"
+      - uses: azure/login@v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - uses: azure/artifact-signing-action@v2
+        with:
+          endpoint: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.ARTIFACT_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.ARTIFACT_SIGNING_PROFILE }}
+          files: |
+            ${{ steps.unpack.outputs.folder }}\caddy.exe
+            ${{ steps.unpack.outputs.folder }}\Update-Caddy.ps1
+          file-digest: SHA256
+          # Artifact Signing certificates are valid for 72 hours; the timestamp keeps the
+          # signature valid after that (README of the action, "Timestamping")
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          description: Caddy with plugins, built by github.com/MarcFauser/caddy-deb
+          description-url: https://github.com/MarcFauser/caddy-deb
+          # only the Azure CLI login of azure/login above (docs/OIDC.md of the action)
+          exclude-environment-credential: true
+          exclude-workload-identity-credential: true
+          exclude-managed-identity-credential: true
+          exclude-shared-token-cache-credential: true
+          exclude-visual-studio-credential: true
+          exclude-visual-studio-code-credential: true
+          exclude-azure-cli-credential: false
+          exclude-azure-powershell-credential: true
+          exclude-azure-developer-cli-credential: true
+          exclude-interactive-browser-credential: true
+      - name: check the signatures and pack the zip again
+        shell: pwsh
+        env:
+          FOLDER: ${{ steps.unpack.outputs.folder }}
+          ZIP_NAME: ${{ steps.unpack.outputs.zip }}
+        run: ./scripts/pack-signed-windows.ps1 -Folder $env:FOLDER -ZipName $env:ZIP_NAME -Destination signed
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-signed
+          path: signed/
+          if-no-files-found: error
+
   test-windows:
     # The Windows zip and Update-Caddy.ps1 against a real Windows service; the runner VM runs
-    # as administrator and is thrown away after the job.
+    # as administrator and is thrown away after the job. The signed zip if there is one.
     name: Windows build and update script
-    needs: build
+    needs: [build, sign-windows]
+    if: ${{ !cancelled() && needs.build.result == 'success' && (needs.sign-windows.result == 'success' || needs.sign-windows.result == 'skipped') }}
     runs-on: windows-2025
     timeout-minutes: 20
     steps:
@@ -115,16 +192,27 @@ jobs:
         with:
           name: deb
           path: out
+      - uses: actions/download-artifact@v8
+        if: needs.sign-windows.result == 'success'
+        with:
+          name: windows-signed
+          path: signed
+      - name: take the signed zip
+        if: needs.sign-windows.result == 'success'
+        shell: pwsh
+        run: Copy-Item -Path signed\*_windows_amd64.zip -Destination out -Force
       - name: test
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: ./tests/windows-test.ps1 -OutDir out
+          # a publishing run: an unsigned build must not go out with a script that pins a signer
+          PUBLISHING: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+        run: ./tests/windows-test.ps1 -OutDir out -Publishing:($env:PUBLISHING -eq 'true')
 
   merge:
     name: merge the Dependabot update
     needs: [test, test-systemd, test-windows]
-    if: github.event_name == 'pull_request' && github.event.pull_request.user.login == 'dependabot[bot]'
+    if: ${{ !cancelled() && needs.test.result == 'success' && needs.test-systemd.result == 'success' && needs.test-windows.result == 'success' && github.event_name == 'pull_request' && github.event.pull_request.user.login == 'dependabot[bot]' }}
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -144,8 +232,8 @@ jobs:
 
   publish:
     name: publish to GitHub Pages
-    needs: [build, test, test-systemd, test-windows]
-    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: [build, sign-windows, test, test-systemd, test-windows]
+    if: ${{ !cancelled() && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && needs.build.result == 'success' && (needs.sign-windows.result == 'success' || needs.sign-windows.result == 'skipped') && needs.test.result == 'success' && needs.test-systemd.result == 'success' && needs.test-windows.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
@@ -169,6 +257,21 @@ jobs:
         with:
           name: deb
           path: out
+      - uses: actions/download-artifact@v8
+        if: needs.sign-windows.result == 'success'
+        with:
+          name: windows-signed
+          path: signed
+      - name: take the signed zip
+        if: needs.sign-windows.result == 'success'
+        run: |
+          signed=(signed/*_windows_amd64.zip)
+          if [ "${#signed[@]}" -ne 1 ] || [ ! -f "${signed[0]}" ] || [ ! -f "out/$(basename "${signed[0]}")" ]
+          then
+              echo "FAIL: expected one signed zip with the name of the zip in out/: ${signed[*]}" >&2
+              exit 1
+          fi
+          cp "${signed[0]}" out/
       - id: choose
         name: keep the published package if it did not change
         env:
@@ -230,6 +333,7 @@ jobs:
   verify:
     name: install from the published repository
     needs: publish
+    if: ${{ !cancelled() && needs.publish.result == 'success' }}
     runs-on: ubuntu-24.04
     container: debian:13
     timeout-minutes: 15
@@ -242,7 +346,7 @@ jobs:
     # release, and its release may predate the Windows build.
     name: install the release on Windows
     needs: publish
-    if: needs.publish.outputs.reused == 'false'
+    if: ${{ !cancelled() && needs.publish.result == 'success' && needs.publish.outputs.reused == 'false' }}
     runs-on: windows-2025
     timeout-minutes: 15
     steps:

@@ -15,6 +15,13 @@
     service, and the .cmd launcher. Also that a service gets environment variables from its
     registry value "Environment", as the README describes it for the Cloudflare token.
 
+    Signatures: a signed build (build.yml's signing job) must carry one Artifact Signing
+    profile on caddy.exe and Update-Caddy.ps1, and every update run then checks it
+    (-SignerEku). The check itself is tested on every build against git.exe of Git for
+    Windows, which is signed with Artifact Signing too: its own profile passes, another
+    profile, a changed byte and an unsigned caddy.exe do not. With -Publishing, an unsigned
+    build fails if Update-Caddy.ps1 pins a signer by default.
+
     -PublishedVersion: after publishing, Update-Caddy.ps1 from the repository installs the
     newest release from GitHub into an empty folder; it must be that version, with the
     plugins, and a second run must find nothing to do.
@@ -25,6 +32,9 @@
 param(
     [Parameter(Mandatory, ParameterSetName = 'Build')]
     [string] $OutDir,
+
+    [Parameter(ParameterSetName = 'Build')]
+    [switch] $Publishing,
 
     [Parameter(Mandatory, ParameterSetName = 'Release')]
     [string] $PublishedVersion
@@ -102,6 +112,47 @@ function Assert-Plugin([string] $Binary)
     }
 }
 
+$publicTrustEku = '1.3.6.1.4.1.311.97.1.0'
+
+# The Artifact Signing profile EKU (1.3.6.1.4.1.311.97.<numbers>) of a file whose signature is
+# valid, or '' if it has no valid signature or not exactly one profile EKU
+function Get-ProfileEku([string] $Path)
+{
+    $signature = Get-AuthenticodeSignature -LiteralPath $Path
+    if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid)
+    {
+        return ''
+    }
+    $ekus = @($signature.SignerCertificate.Extensions |
+            Where-Object { $_ -is [System.Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension] } |
+            ForEach-Object { $_.EnhancedKeyUsages } |
+            ForEach-Object { [string]$_.Value })
+    $profiles = @($ekus | Where-Object { $_.StartsWith('1.3.6.1.4.1.311.97.', [StringComparison]::Ordinal) -and $_ -cne $publicTrustEku })
+    if ($ekus -cnotcontains $publicTrustEku -or $profiles.Count -ne 1)
+    {
+        return ''
+    }
+    return $profiles[0]
+}
+
+# The default of -SignerEku in Update-Caddy.ps1: the profile it pins, or ''
+function Get-PinnedEku([string] $Script)
+{
+    $tokens = $null
+    $errors = $null
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile($Script, [ref]$tokens, [ref]$errors)
+    if (@($errors).Count -gt 0)
+    {
+        throw "FAIL: $Script does not parse: $($errors[0].Message)"
+    }
+    $parameter = @($ast.ParamBlock.Parameters | Where-Object { $_.Name.VariablePath.UserPath -ceq 'SignerEku' })
+    if ($parameter.Count -ne 1 -or $null -eq $parameter[0].DefaultValue)
+    {
+        throw "FAIL: $Script has no parameter SignerEku with a default"
+    }
+    return [string]$parameter[0].DefaultValue.SafeGetValue()
+}
+
 function Get-ApiHeader
 {
     $headers = @{ Accept = 'application/vnd.github+json'; 'X-GitHub-Api-Version' = '2022-11-28' }
@@ -167,6 +218,9 @@ if ($PSCmdlet.ParameterSetName -eq 'Release')
     $installed = (Get-Item -LiteralPath $exe).VersionInfo.FileVersion
     Assert-True ($installed -ceq $PublishedVersion) "the installed caddy.exe is $PublishedVersion (it is $installed)"
     Assert-Plugin $exe
+    # Update-Caddy.ps1 has checked the signature already if it pins a signer
+    $releaseEku = Get-ProfileEku $exe
+    Write-Host "the installed caddy.exe is $(if ($releaseEku) { "signed by the Artifact Signing profile $releaseEku" } else { 'not signed' })"
     $code = Invoke-UpdateScript $updateScript @('-InstallDir', $releaseDir, '-ServiceName', $noService)
     Assert-True ($code -eq 0 -and (Get-LastLogLine $releaseDir).Contains('nothing to do')) 'a second run finds nothing to do'
     Write-Host ''
@@ -210,6 +264,28 @@ public static extern uint ExtractIconEx(string lpszFile, int nIconIndex, IntPtr[
 '@
 $icons = [CaddyDebTest.Shell]::ExtractIconEx($exe, -1, $null, $null, 0)
 Assert-True ($icons -ge 1) "caddy.exe has an icon ($icons)"
+
+Write-Step 'signatures'
+$exeSignature = Get-AuthenticodeSignature -LiteralPath $exe
+$pinnedEku = Get-PinnedEku $updateScript
+Write-Host "Update-Caddy.ps1 pins the signer: $(if ($pinnedEku) { $pinnedEku } else { 'no' })"
+$buildEku = ''
+if ($exeSignature.Status -eq [System.Management.Automation.SignatureStatus]::NotSigned)
+{
+    Assert-True (-not ($Publishing -and $pinnedEku)) 'a build that is published unsigned has an Update-Caddy.ps1 that pins no signer'
+    # the update runs below test everything but the signature, which comes further down
+    $signerArgs = @('-SignerEku', '')
+}
+else
+{
+    $buildEku = Get-ProfileEku $exe
+    Assert-True ($buildEku -ne '') "caddy.exe is signed by one Artifact Signing profile ($($exeSignature.Status), $buildEku, $($exeSignature.SignerCertificate.Subject))"
+    Assert-True ($null -ne $exeSignature.TimeStamperCertificate) 'the signature of caddy.exe is timestamped'
+    Assert-True ((Get-ProfileEku $updateScript) -ceq $buildEku) 'Update-Caddy.ps1 is signed by the same profile'
+    Assert-True ($pinnedEku -eq '' -or $pinnedEku -ceq $buildEku) "Update-Caddy.ps1 pins no signer or this profile ($pinnedEku)"
+    # every update run below checks the signature of this build
+    $signerArgs = @('-SignerEku', $buildEku)
+}
 
 Write-Step 'the binary runs and has the plugins'
 $versionLine = [string]@(& $exe version)[0]
@@ -260,7 +336,8 @@ try
 {
     Write-Step 'update: Caddy''s own caddy.exe -> this build'
     $pidBefore = Get-ServicePid
-    $common = @('-InstallDir', $serviceDir, '-ServiceName', $testService)
+    $base = @('-InstallDir', $serviceDir, '-ServiceName', $testService)
+    $common = $base + $signerArgs
     $code = Invoke-UpdateScript $updateScript ($common + @('-ZipPath', $zip, '-ZipSha256', $zipSha, '-HealthUrl', $siteUrl))
     Assert-True ($code -eq 0) 'Update-Caddy.ps1 succeeded'
     Assert-True ((Get-Item -LiteralPath $serviceExe).VersionInfo.FileVersion -ceq $packageVersion) "caddy.exe is now $packageVersion"
@@ -288,7 +365,8 @@ try
     $null = New-Item -ItemType Directory -Path $fakeDir
     $fakeZip = Join-Path $fakeDir $zips[0].Name
     Compress-Archive -LiteralPath $officialExe -DestinationPath $fakeZip
-    $code = Invoke-UpdateScript $updateScript ($common + @('-ZipPath', $fakeZip, '-Force'))
+    # without the signature check, which would refuse it first
+    $code = Invoke-UpdateScript $updateScript ($base + @('-SignerEku', '', '-ZipPath', $fakeZip, '-Force'))
     Assert-True ($code -eq 1 -and (Get-LastLogLine $serviceDir).Contains('file version')) 'exit code 1, the log names the file version'
     Assert-True ((Get-ServicePid) -eq $pidAfter -and (Get-Item -LiteralPath $serviceExe).VersionInfo.FileVersion -ceq $packageVersion) 'service and caddy.exe were not touched'
 
@@ -314,7 +392,7 @@ try
 
     Write-Step 'a folder without a service: caddy.exe is put there'
     $freshDir = Join-Path $testRoot 'fresh'
-    $freshArgs = @('-InstallDir', $freshDir, '-ServiceName', $noService)
+    $freshArgs = @('-InstallDir', $freshDir, '-ServiceName', $noService) + $signerArgs
     $code = Invoke-UpdateScript $updateScript ($freshArgs + @('-ZipPath', $zip))
     Assert-True ($code -eq 0 -and (Get-LastLogLine $freshDir).Contains("no service $noService")) 'exit code 0, the log says there is no service'
     Assert-True ((Get-Item -LiteralPath (Join-Path $freshDir 'caddy.exe')).VersionInfo.FileVersion -ceq $packageVersion) "caddy.exe $packageVersion is there"
@@ -327,6 +405,45 @@ try
     Assert-True ($okRun.ExitCode -eq 0 -and (Get-LastLogLine $freshDir).Contains('nothing to do')) "through the .cmd: exit code 0, nothing to do ($($okRun.ExitCode))"
     $failRun = Start-Process -FilePath cmd.exe -ArgumentList "/d /c $launcher -InstallDir $freshDir -ServiceName $noService -ZipPath $zip -ZipSha256 $('0' * 64) -Force" -RedirectStandardInput $enter -NoNewWindow -Wait -PassThru
     Assert-True ($failRun.ExitCode -eq 1) "through the .cmd: a failure gives exit code 1 ($($failRun.ExitCode))"
+
+    Write-Step 'the signature check, against git.exe of Git for Windows (Artifact Signing)'
+    $gitExe = Join-Path $env:ProgramFiles 'Git\bin\git.exe'
+    $gitEku = Get-ProfileEku $gitExe
+    Assert-True ($gitEku -ne '') "$gitExe is signed by one Artifact Signing profile ($gitEku), the positive control"
+    $sigRoot = Join-Path $testRoot 'signature'
+    $gitZip = Join-Path $sigRoot "git\$($zips[0].Name)"
+    $tamperedZip = Join-Path $sigRoot "tampered\$($zips[0].Name)"
+    $null = New-Item -ItemType Directory -Path (Join-Path $sigRoot 'git-exe'), (Join-Path $sigRoot 'tampered-exe'), (Split-Path $gitZip), (Split-Path $tamperedZip)
+    $gitCopy = Join-Path $sigRoot 'git-exe\caddy.exe'
+    Copy-Item -LiteralPath $gitExe -Destination $gitCopy
+    Compress-Archive -LiteralPath $gitCopy -DestinationPath $gitZip
+    $bytes = [System.IO.File]::ReadAllBytes($gitExe)
+    $middle = [int][Math]::Floor($bytes.Length / 2)
+    $bytes[$middle] = $bytes[$middle] -bxor 0xFF
+    $tamperedCopy = Join-Path $sigRoot 'tampered-exe\caddy.exe'
+    [System.IO.File]::WriteAllBytes($tamperedCopy, $bytes)
+    Compress-Archive -LiteralPath $tamperedCopy -DestinationPath $tamperedZip
+    $sigDir = Join-Path $sigRoot 'install'
+    $sigArgs = @('-InstallDir', $sigDir, '-ServiceName', $noService)
+
+    $code = Invoke-UpdateScript $updateScript ($sigArgs + @('-ZipPath', $gitZip, '-SignerEku', $gitEku))
+    $logLines = @(Get-Content -LiteralPath (Join-Path $sigDir 'update-caddy.log'))
+    Assert-True ($code -eq 1 -and ($logLines -join "`n").Contains("(Artifact Signing profile $gitEku)") -and $logLines[-1].Contains('file version')) 'with its own profile, git.exe passes the signature check and then fails the file version'
+    $otherEku = '1.3.6.1.4.1.311.97.4242.4242'
+    $code = Invoke-UpdateScript $updateScript ($sigArgs + @('-ZipPath', $gitZip, '-SignerEku', $otherEku))
+    Assert-True ($code -eq 1 -and (Get-LastLogLine $sigDir).Contains("not from the Artifact Signing profile $otherEku")) 'another profile is refused'
+    $code = Invoke-UpdateScript $updateScript ($sigArgs + @('-ZipPath', $tamperedZip, '-SignerEku', $gitEku))
+    Assert-True ($code -eq 1 -and (Get-LastLogLine $sigDir).Contains('no valid signature (HashMismatch')) 'a changed byte is refused'
+    $code = Invoke-UpdateScript $updateScript ($sigArgs + @('-ZipPath', $fakeZip, '-Force', '-SignerEku', $gitEku))
+    Assert-True ($code -eq 1 -and (Get-LastLogLine $sigDir).Contains('signature')) "Caddy's own caddy.exe is refused: $(Get-LastLogLine $sigDir)"
+    $code = Invoke-UpdateScript $updateScript ($sigArgs + @('-ZipPath', $gitZip, '-SignerEku', $publicTrustEku))
+    Assert-True ($code -eq 1 -and (Get-LastLogLine $sigDir).Contains('needs the EKU of one certificate profile')) 'the Public Trust EKU is refused as a profile'
+    if ($pinnedEku -and $buildEku -eq '')
+    {
+        $code = Invoke-UpdateScript $updateScript ($sigArgs + @('-ZipPath', $zip))
+        Assert-True ($code -eq 1 -and (Get-LastLogLine $sigDir).Contains('no valid signature (NotSigned')) 'by default, Update-Caddy.ps1 refuses this unsigned build'
+    }
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $sigDir 'caddy.exe'))) 'none of these was installed'
 }
 finally
 {

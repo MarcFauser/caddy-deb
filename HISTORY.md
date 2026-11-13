@@ -178,3 +178,36 @@ version, as a server switching over would. `caddy.exe` has no code signature; th
 checks the zip against the SHA-256 digest GitHub records, which shows that it is the file in
 this repository's release, not who built it. The owner has Azure code signing at the office;
 signing is left for later.
+
+## 2026-11-13 - code signing, prepared
+
+The same day the owner asked to prepare the signing. Azure Trusted Signing is called Artifact
+Signing now, and its GitHub action runs on Windows runners only, so the build stays on Linux
+and a Windows job signs `caddy.exe` and `Update-Caddy.ps1` out of the built zip and packs it
+again. The job logs in with OpenID Connect for the environment `code-signing`, which only
+`main` may use; Azure trusts exactly that, so there is no secret, and a pull request, a
+Dependabot one or one from a fork, cannot sign. Until the repository variables are set the
+job is skipped and nothing changes. A skipped job made one more change necessary: with
+GitHub's implicit `success()`, a skipped job also skips the jobs after it (actions/runner#491
+and the documentation of `needs`), so every job after it now names the results it needs.
+
+What a signature is checked against was the open question. Artifact Signing renews its
+certificates daily and each is valid for 72 hours, so a thumbprint is useless; Microsoft gives
+every certificate profile an EKU of its own, `1.3.6.1.4.1.311.97.<numbers>`, that stays for
+the lifetime of the profile, and recommends pinning that. The update script now takes it as
+`-SignerEku` and refuses a `caddy.exe` without a valid, timestamped signature carrying that EKU
+and the Public Trust EKU, whose chain does not end in Microsoft Identity Verification Root
+Certificate Authority 2020. The check runs before the new `caddy.exe` is executed for its
+version.
+
+Git for Windows signs `git.exe` with Artifact Signing, and that made the check testable without
+an Azure account: on the runner and locally, `git.exe` in a zip passes the check with its own
+profile and fails it with another, with one changed byte and without a signature. Its
+certificate had expired two weeks before and the signature was still valid through its
+timestamp, which is the state every signed `caddy.exe` reaches after three days.
+
+The EKU is not known before the first signed build, so the default of `-SignerEku` stays empty
+for now: the first signed release prints it, and committing it into the script is the step
+that makes the servers refuse anything else. Signing an open-source project of the owner with
+the identity behind the office's Artifact Signing account is the owner's decision; the
+certificate names whoever was validated for the profile.

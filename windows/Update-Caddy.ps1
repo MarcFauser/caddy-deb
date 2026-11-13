@@ -17,6 +17,11 @@
     download, "caddy upgrade") has a lower or no file version and is replaced by the next
     release.
 
+    With -SignerEku, the new caddy.exe must also carry a valid, timestamped Authenticode
+    signature from that Azure Artifact Signing certificate profile, checked before it is run
+    or installed. The SHA-256 digest only shows that the zip is the file in the release; the
+    signature shows who built it.
+
     Like apt's try-restart: a service that was stopped stays stopped. Without a service of
     that name the script only puts caddy.exe into the folder (first installation). It
     refuses to touch a service that runs a different caddy.exe, and a caddy.exe from this
@@ -46,6 +51,15 @@
     http://localhost:2019/config/ if the configuration keeps it. Otherwise only the service
     state is checked.
 
+.PARAMETER SignerEku
+    The Azure Artifact Signing certificate profile whose signature the new caddy.exe must
+    carry, as the profile's durable identity: an EKU 1.3.6.1.4.1.311.97.<numbers>. Artifact
+    Signing renews its certificates daily and each is valid for 72 hours, so a thumbprint
+    cannot be pinned; every certificate of one profile carries that profile's EKU. The
+    signature must be valid for Windows, timestamped, carry the Public Trust EKU
+    1.3.6.1.4.1.311.97.1.0 and lead to Microsoft's Identity Verification Root Certificate
+    Authority 2020. Empty: caddy.exe is not checked for a signature.
+
 .PARAMETER StartTimeoutSeconds
     How long the service may take to report "running" after the start.
 
@@ -74,6 +88,10 @@ param(
 
     [string] $HealthUrl,
 
+    # Empty until the Windows build is signed; then the profile of build.yml's signing job.
+    [ValidatePattern('^(1\.3\.6\.1\.4\.1\.311\.97\.\d+(\.\d+)+)?$')]
+    [string] $SignerEku = '',
+
     [ValidateRange(5, 600)]
     [int] $StartTimeoutSeconds = 60,
 
@@ -85,6 +103,14 @@ $ErrorActionPreference = 'Stop'
 
 $invariant = [System.Globalization.CultureInfo]::InvariantCulture
 $zipNamePattern = '^caddy_(\d+\.\d+\.\d+-\d+)_windows_amd64\.zip$'
+
+# Azure Artifact Signing: every Public Trust certificate carries the EKU 1.3.6.1.4.1.311.97.1.0
+# besides code signing and its profile's EKU (Microsoft, "Artifact Signing certificate
+# management"); the chain ends in Microsoft Identity Verification Root Certificate Authority
+# 2020 (read from Artifact Signing signatures, 2026-11-13).
+$codeSigningEku = '1.3.6.1.5.5.7.3.3'
+$publicTrustEku = '1.3.6.1.4.1.311.97.1.0'
+$identityRootThumbprint = 'F40042E2E5F7E8EF8189FED15519AECE42C3BFA2'
 
 if (-not (Test-Path -LiteralPath $InstallDir -PathType Container))
 {
@@ -178,6 +204,55 @@ function Get-Target
         throw "GitHub records no SHA-256 digest for $($asset.name) ('$digest')"
     }
     return [pscustomobject]@{ Version = $version; Name = [string]$asset.name; Source = [string]$asset.browser_download_url; Sha256 = $dm.Groups[1].Value; Local = $false }
+}
+
+# Throws unless the file carries a valid, timestamped signature from the Artifact Signing
+# profile $SignerEku. Windows decides whether the signature is valid and trusted
+# (WinVerifyTrust, behind Get-AuthenticodeSignature); this adds which profile and which root.
+function Assert-Signature([string] $Path)
+{
+    $name = Split-Path -Leaf $Path
+    $signature = Get-AuthenticodeSignature -LiteralPath $Path
+    if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid)
+    {
+        throw "$name has no valid signature ($($signature.Status): $($signature.StatusMessage))"
+    }
+    # The certificate is valid for 72 hours; only a timestamp keeps the signature valid after that.
+    if ($null -eq $signature.TimeStamperCertificate)
+    {
+        throw "the signature of $name has no timestamp"
+    }
+    $certificate = $signature.SignerCertificate
+    $ekus = @($certificate.Extensions |
+            Where-Object { $_ -is [System.Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension] } |
+            ForEach-Object { $_.EnhancedKeyUsages } |
+            ForEach-Object { [string]$_.Value })
+    if ($ekus -cnotcontains $codeSigningEku -or $ekus -cnotcontains $publicTrustEku -or $ekus -cnotcontains $SignerEku)
+    {
+        throw "the signature of $name is from '$($certificate.Subject)' with the EKUs $($ekus -join ', '), not from the Artifact Signing profile $SignerEku"
+    }
+    # The chain from the certificates in the signature itself, so that it does not depend on
+    # what this machine has cached. The signing certificate has expired after 72 hours.
+    $embedded = [System.Security.Cryptography.X509Certificates.X509Certificate2Collection]::new()
+    $embedded.Import($Path)
+    $chain = [System.Security.Cryptography.X509Certificates.X509Chain]::new()
+    try
+    {
+        $chain.ChainPolicy.RevocationMode = [System.Security.Cryptography.X509Certificates.X509RevocationMode]::NoCheck
+        $chain.ChainPolicy.VerificationFlags = [System.Security.Cryptography.X509Certificates.X509VerificationFlags]::IgnoreNotTimeValid
+        $chain.ChainPolicy.ExtraStore.AddRange($embedded)
+        $null = $chain.Build($certificate)
+        $root = $chain.ChainElements[$chain.ChainElements.Count - 1].Certificate
+        if ($root.Thumbprint -cne $identityRootThumbprint)
+        {
+            throw "the signature of $name leads to '$($root.Subject)' ($($root.Thumbprint)), not to Microsoft Identity Verification Root Certificate Authority 2020"
+        }
+    }
+    finally
+    {
+        $chain.Dispose()
+    }
+    Write-UpdateLog "$name is signed by $($certificate.Subject) (Artifact Signing profile $SignerEku)"
 }
 
 # The service if it exists; it must run caddy.exe from this folder
@@ -293,6 +368,10 @@ function Invoke-ServiceStart
 
 function Invoke-Update
 {
+    if ($SignerEku -ceq $publicTrustEku)
+    {
+        throw "$publicTrustEku is in every Public Trust certificate of Artifact Signing; -SignerEku needs the EKU of one certificate profile"
+    }
     $target = Get-Target
     $targetVersion = ConvertTo-FileVersion $target.Version
     if ($null -eq $targetVersion)
@@ -364,6 +443,11 @@ function Invoke-Update
         if (-not (Test-Path -LiteralPath $newExe -PathType Leaf))
         {
             throw "$($target.Name) holds no caddy.exe"
+        }
+        # before caddy.exe runs below
+        if ($SignerEku)
+        {
+            Assert-Signature $newExe
         }
         $newVersion = Get-ExeVersion $newExe
         if ($newVersion -ne $targetVersion)

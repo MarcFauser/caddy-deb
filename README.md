@@ -212,7 +212,9 @@ back. A stopped service stays stopped, as with apt. It refuses to touch a servic
 a `caddy.exe` from another folder, and a `caddy.exe` from its folder that runs outside the
 service. Every run writes a line to `C:\caddy\update-caddy.log` (times in UTC); exit code 0
 means installed or already current. `Get-Help C:\caddy\Update-Caddy.ps1 -Full` lists the
-options, among them `-HealthUrl` for an address that must answer after the start.
+options, among them `-HealthUrl` for an address that must answer after the start. Once the
+build is signed (see [Code signing](#code-signing)), the script also checks the signature of
+the new `caddy.exe` before it runs or installs it.
 
 The installed version is the file's own: `(Get-Item C:\caddy\caddy.exe).VersionInfo.FileVersion`.
 A `caddy.exe` from elsewhere (Caddy's download page, or `caddy upgrade`, which fetches a build
@@ -237,7 +239,8 @@ service; enable the task again once a fixed version is out. The script updates o
    Caddy's own `caddy.exe` of the same version in a real Windows service with the Windows
    build, and goes through refusals and a rollback (`tests/windows-test.ps1`).
 3. If all tests pass, the workflow merges the pull request and starts a run on `main`,
-   which builds again, signs and publishes the repository on GitHub Pages, attaches the
+   which builds again, signs the Windows build if code signing is set up, tests again, signs
+   and publishes the repository on GitHub Pages, attaches the
    package and the Windows zip to a GitHub release, and installs it from the published
    repository once more, including going back to the oldest offered version and up again,
    and on Windows from the release.
@@ -311,7 +314,8 @@ published package, `scripts/fetch-older.sh` fetches the earlier versions from th
 releases (each checked against the digest GitHub records for it), `scripts/publish.sh`
 creates the signed repository and `caddy-deb.sources`, `tests/install-test.sh`,
 `tests/repo-test.sh` and `tests/windows-test.ps1` are the tests, `windows/Update-Caddy.ps1`
-is the update script for Windows.
+is the update script for Windows, `scripts/pack-signed-windows.ps1` checks the signatures and
+packs the signed Windows zip.
 
 ## Signing key
 
@@ -322,12 +326,84 @@ repository and on the Pages site; the private key is only the repository secret
 creates a key, sets the secret and writes the public key; with a new key, the servers need
 the new `caddy-deb.sources`.
 
+## Code signing
+
+The workflow can sign `caddy.exe` and `Update-Caddy.ps1` with
+[Azure Artifact Signing](https://learn.microsoft.com/azure/artifact-signing/) (formerly
+Trusted Signing), through [azure/artifact-signing-action](https://github.com/Azure/artifact-signing-action).
+The job `sign-windows` runs only in publishing runs on `main` and only once the variable
+`ARTIFACT_SIGNING_PROFILE` is set; until then the Windows build stays unsigned, as now. The
+signed zip goes through the same Windows test before it is released.
+
+The login uses OpenID Connect: Azure trusts a token GitHub issues for this repository's
+environment `code-signing`, and only `main` may use that environment. There is no password
+or key in the repository, and a pull request cannot sign.
+
+**In Azure** (with an Artifact Signing account whose identity validation is done):
+
+1. A certificate profile of the type *Public Trust* for this repository. Its own profile
+   gives it its own identity value (below); a profile shared with other software would let
+   the update script accept that software's signature too. The certificate names the
+   organisation or person of the identity validation behind the profile.
+2. An app registration in Microsoft Entra ID with a federated credential: scenario *GitHub
+   actions deploying Azure resources*, organisation `MarcFauser`, repository `caddy-deb`,
+   entity type *Environment*, name `code-signing` (subject
+   `repo:MarcFauser/caddy-deb:environment:code-signing`).
+3. The role *Artifact Signing Certificate Profile Signer* for that app on the signing account
+   (Access control (IAM)).
+
+**On GitHub,** as the repository owner:
+
+1. *Settings → Environments → New environment* `code-signing`; under *Deployment branches*,
+   choose *Selected branches and tags* and add a rule for `main`.
+2. The repository variables (not secrets; none of them is a credential):
+
+```bash
+gh variable set AZURE_TENANT_ID --repo MarcFauser/caddy-deb --body <directory (tenant) ID>
+gh variable set AZURE_CLIENT_ID --repo MarcFauser/caddy-deb --body <application (client) ID>
+gh variable set AZURE_SUBSCRIPTION_ID --repo MarcFauser/caddy-deb --body <subscription of the signing account>
+gh variable set ARTIFACT_SIGNING_ENDPOINT --repo MarcFauser/caddy-deb --body <endpoint of the account's region>
+gh variable set ARTIFACT_SIGNING_ACCOUNT --repo MarcFauser/caddy-deb --body <signing account name>
+gh variable set ARTIFACT_SIGNING_PROFILE --repo MarcFauser/caddy-deb --body <certificate profile name>
+```
+
+The endpoint belongs to the region the account was created in, for West Europe
+`https://weu.codesigning.azure.net` (the table in Microsoft's Artifact Signing quickstart
+lists all of them). `ARTIFACT_SIGNING_PROFILE` switches signing on; deleting it switches it
+off again.
+
+**The first signed release:** run the workflow with *new_revision* (`gh workflow run build.yml
+--repo MarcFauser/caddy-deb -f new_revision=true`): an unchanged package keeps its release,
+and the zip with it. The servers get the same package once more, with one Caddy restart.
+
+**Pinning the signer.** Artifact Signing renews its certificates daily, each valid for 72
+hours, so neither a certificate nor its thumbprint stays the same. What stays is an EKU of
+the form `1.3.6.1.4.1.311.97.<numbers>` that every certificate of one profile carries
+(Microsoft, "Artifact Signing certificate management"). The signing job prints it in its
+summary. Set it as the default of `-SignerEku` in `windows/Update-Caddy.ps1`; from the next
+release on, the script in the zip installs only a `caddy.exe` with a valid, timestamped
+signature from that profile, issued under Microsoft's root for Artifact Signing, and checks
+that before it runs the file. Copy that `Update-Caddy.ps1` onto the Windows servers (the
+script does not replace itself). A run that would publish an unsigned build with a pinning
+script fails in the Windows test.
+
+If the certificate profile is deleted and created again, it gets a new EKU: set the new one,
+publish, and copy the script again; until then the servers refuse the updates and log why.
+To install an unsigned build anyway, pass `-SignerEku ''`.
+
+Check a signature on Windows:
+
+```powershell
+Get-AuthenticodeSignature C:\caddy\caddy.exe | Format-List Status, SignerCertificate, TimeStamperCertificate
+```
+
 ## Limits
 
 - amd64 only.
-- On Windows, `caddy.exe` has no code signature. What the update script installs is checked
-  against the SHA-256 digest GitHub records for the release file, fetched over HTTPS from
-  GitHub's API; that proves it is the file in this repository's release, not who built it.
+- On Windows, `caddy.exe` has no code signature until [code signing](#code-signing) is set
+  up. Until then, what the update script installs is checked against the SHA-256 digest
+  GitHub records for the release file, fetched over HTTPS from GitHub's API; that proves it
+  is the file in this repository's release, not who built it.
 - The Pages site keeps the newest package and the four highest earlier versions (18 MB
   each, against GitHub Pages' 1 GB per site); every package also stays attached to its
   GitHub release.

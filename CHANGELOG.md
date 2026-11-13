@@ -5,6 +5,32 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html). This is the version of the
 packaging; the package version follows Caddy (`<caddy version>-<run number>`).
 
+## [3.0.0] - 2026-11-13
+
+### Added
+
+- Code signing for the Windows build with Azure Artifact Signing, prepared and off until the
+  repository variables are set: the job `sign-windows` signs `caddy.exe` and
+  `Update-Caddy.ps1` (timestamped) in publishing runs on `main`, logs in to Azure with OpenID
+  Connect for the environment `code-signing`, checks both signatures and packs the zip again
+  (`scripts/pack-signed-windows.ps1`); the signed zip is tested and released instead of the
+  unsigned one. README section "Code signing" with the setup in Azure and on GitHub.
+- `Update-Caddy.ps1 -SignerEku`: with the EKU of an Artifact Signing certificate profile, the
+  new `caddy.exe` must carry a valid, timestamped signature from that profile with the Public
+  Trust EKU, leading to Microsoft Identity Verification Root Certificate Authority 2020; it is
+  checked before `caddy.exe` runs. Empty by default until the first signed release shows the
+  profile's EKU.
+- `tests/windows-test.ps1` tests the signature check on every build against `git.exe` of Git
+  for Windows, which is signed with Artifact Signing (its own profile passes; another profile,
+  a changed byte, Caddy's own `caddy.exe` and the Public Trust EKU as a profile do not), checks
+  a signed build's signatures, and fails a publishing run whose unsigned build comes with a
+  script that pins a signer.
+
+### Changed
+
+- The jobs after `sign-windows`, which is skipped until signing is set up, name the results
+  they need instead of relying on GitHub's implicit `success()`, which would skip them too.
+
 ## [2.0.0] - 2026-11-13
 
 ### Added
