@@ -5,6 +5,32 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html). This is the version of the
 packaging; the package version follows Caddy (`<caddy version>-<run number>`).
 
+## [2.0.0] - 2026-11-13
+
+### Added
+
+- A Windows build: every release also carries `caddy_<version>_windows_amd64.zip` with
+  `caddy.exe` (the same `go build` with `GOOS=windows`), `LICENSE`, `Update-Caddy.ps1` and
+  `Update-Caddy.cmd`. Like Caddy's own release, `caddy.exe` carries Caddy's icon (from xcaddy,
+  checked against its SHA-256) and a version resource (goversioninfo); its file version is
+  the package version, `2.11.9-16` as 2.11.9.16. The build checks that the plugins are
+  linked in (`go version -m`).
+- `windows/Update-Caddy.ps1`: installs the newest release into a folder and restarts the
+  Windows service that runs it. It reads the installed version from `caddy.exe`, checks the
+  zip against the SHA-256 digest GitHub records, keeps the old `caddy.exe` as
+  `caddy.exe.previous`, rolls back if the service does not come up, leaves a stopped service
+  stopped, refuses a service that runs another folder's `caddy.exe` and a `caddy.exe` running
+  outside the service, and logs to `update-caddy.log` (UTC). `Update-Caddy.cmd` starts it.
+- `tests/windows-test.ps1` on a Windows runner, before publishing: the zip, the version
+  resource and icon, the plugins, and the update script against a real Windows service
+  (from Caddy's own `caddy.exe` of the same version to this build, then nothing to do, wrong
+  SHA-256, a zip with the wrong `caddy.exe`, another folder's service, rollback, stopped
+  service, no service, the `.cmd`), and the service's environment variables from its
+  registry value `Environment`. After publishing, the script installs the new release from
+  GitHub. Dependabot updates are merged only when the Windows test passes too.
+- README section "On Windows": unpacking, service, Cloudflare token, scheduled task, going
+  back.
+
 ## [1.4.1] - 2026-11-07
 
 ### Fixed

@@ -6,7 +6,8 @@ name: build
 # revision is published only when the package itself changed (scripts/choose-package.sh);
 # otherwise the published package stays and the servers have nothing to install. The
 # repository also offers earlier versions from the GitHub releases (KEEP_VERSIONS in total,
-# scripts/fetch-older.sh) for going back.
+# scripts/fetch-older.sh) for going back. Every release also carries the Windows build as a
+# zip, which windows/Update-Caddy.ps1 installs on Windows servers.
 on:
   push:
     branches: [main]
@@ -39,6 +40,11 @@ env:
   # (Apache-2.0), the same files Caddy's own package contains
   DIST_REF: f94a1d2626835ff4157e85296fb8e4fa5500e0fb
   NFPM_VERSION: v2.48.0
+  # Windows build: Caddy's icon from xcaddy v0.4.7 (internal/utils/resources/ico/caddy.ico,
+  # Apache-2.0) and goversioninfo as xcaddy v0.4.7 uses it (go.mod), see scripts/build.sh
+  XCADDY_REF: e0e8f68a0f4bef11bfd04c4fb3091052ad36132f
+  CADDY_ICO_SHA256: 63fd9064c4bf5bae0935105c909129862d24ac8038436f052af697c16b9027ea
+  GOVERSIONINFO_VERSION: v1.7.0
 
 jobs:
   build:
@@ -96,9 +102,28 @@ jobs:
           path: out
       - run: sudo bash tests/install-test.sh out/*.deb
 
+  test-windows:
+    # The Windows zip and Update-Caddy.ps1 against a real Windows service; the runner VM runs
+    # as administrator and is thrown away after the job.
+    name: Windows build and update script
+    needs: build
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: deb
+          path: out
+      - name: test
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: ./tests/windows-test.ps1 -OutDir out
+
   merge:
     name: merge the Dependabot update
-    needs: [test, test-systemd]
+    needs: [test, test-systemd, test-windows]
     if: github.event_name == 'pull_request' && github.event.pull_request.user.login == 'dependabot[bot]'
     runs-on: ubuntu-24.04
     permissions:
@@ -119,7 +144,7 @@ jobs:
 
   publish:
     name: publish to GitHub Pages
-    needs: [build, test, test-systemd]
+    needs: [build, test, test-systemd, test-windows]
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -192,12 +217,12 @@ jobs:
           GH_REPO: ${{ github.repository }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          # a re-run of the same run has the same version: replace the file then
+          # a re-run of the same run has the same version: replace the files then
           if gh release view "v$VERSION" >/dev/null 2>&1
           then
-              gh release upload "v$VERSION" out/*.deb --clobber
+              gh release upload "v$VERSION" out/*.deb out/*_windows_amd64.zip --clobber
           else
-              gh release create "v$VERSION" out/*.deb --target "$GITHUB_SHA" \
+              gh release create "v$VERSION" out/*.deb out/*_windows_amd64.zip --target "$GITHUB_SHA" \
                   --title "caddy $VERSION" \
                   --notes "caddy $VERSION (amd64), built by run ${{ github.run_number }} from $GITHUB_SHA."
           fi
@@ -211,3 +236,19 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - run: bash tests/repo-test.sh "${{ needs.publish.outputs.page_url }}" "${{ needs.publish.outputs.version }}" "${{ needs.publish.outputs.offered }}"
+
+  verify-windows:
+    # Update-Caddy.ps1 installs the new release from GitHub. A kept package has no new
+    # release, and its release may predate the Windows build.
+    name: install the release on Windows
+    needs: publish
+    if: needs.publish.outputs.reused == 'false'
+    runs-on: windows-2025
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - name: test
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: ./tests/windows-test.ps1 -PublishedVersion "${{ needs.publish.outputs.version }}"

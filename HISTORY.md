@@ -142,3 +142,39 @@ to re-run the deployment, and that cannot work here: a re-run keeps the earlier 
 artifact in the run, uploads a second one of the same name, and `deploy-pages` refuses two.
 Since 1.4.1 each attempt names its own artifact. 2.11.9 comes from the next run instead, with
 that run's number as its revision; revision 14 never existed outside build #14.
+
+## 2026-11-13 - a Windows build, and how it updates itself
+
+On 2026-11-13 the weekly run published 2.11.9-16 for nothing but Go 1.27.4, the case it was
+built for. The same day the owner asked what a Windows build would take. Building is one more
+`go build`; what makes it worth having is the update, because Windows has no apt that
+replaces the file and restarts the service. The reason for this repository on Debian, apt
+overwriting a binary that `caddy add-package` changed, does not exist on Windows: nothing
+overwrites `caddy.exe` there. So the Windows build matters for a server that needs a plugin
+such as the Cloudflare DNS module, and the update script for every Windows server.
+
+The update script reads the installed version from `caddy.exe` itself. Caddy's own release
+already embeds a version resource and Caddy's icon through xcaddy; this build does the same
+with goversioninfo and puts the package revision into the fourth part of the file version.
+The first draft left the icon out to keep it simple; the owner asked why, and with the
+version resource in place the script needs no state file. A `caddy.exe` from Caddy's download
+page or from `caddy upgrade` (which asks Caddy's build server for the newest Caddy with the
+installed plugins) has a lower file version without the revision, so the next release
+replaces it.
+
+The script behaves like the Debian package where it can: it restarts only a running service
+(`try-restart`), and it keeps the previous `caddy.exe` to go back to. Alternatives turned
+down: winget would need a public pull request to `microsoft/winget-pkgs` for every version,
+and neither winget nor Scoop stops a running service before replacing its program. The log
+uses UTC, the owner's choice. The archive stays zip, as with Caddy's own Windows release: on a
+41.8 MB Go binary, 7z came to 26 % of it against 36 % for zip, about 4 to 5 MB less for
+`caddy.exe` per update, but PowerShell's `Expand-Archive` reads only zip, and whether older
+Windows versions' `tar.exe` reads 7z was not measured. The script only replaces `caddy.exe`, not itself, so that a
+broken script in a release cannot break the next update; a newer script is copied by hand.
+
+The Windows test runs on a GitHub Windows runner, which is administrator and thrown away
+afterwards, against a real service: it starts from Caddy's own `caddy.exe` of the same
+version, as a server switching over would. `caddy.exe` has no code signature; the script
+checks the zip against the SHA-256 digest GitHub records, which shows that it is the file in
+this repository's release, not who built it. The owner has Azure code signing at the office;
+signing is left for later.

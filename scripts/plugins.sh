@@ -37,3 +37,33 @@ check_plugins()
 
     return "$missing"
 }
+
+# The same check for a binary that cannot run here (the Windows build on Linux): every plugin
+# import must come from a Go module the binary was linked with, as "go version -m" lists them
+# ("dep <module path> <version> <checksum>"). Whether Caddy registers the modules is checked
+# where the binary runs (tests/windows-test.ps1).
+check_plugins_static()
+{
+    local bin="$1" main="$2" list imports import missing=0
+
+    imports="$(plugin_imports "$main")"
+    if [ -z "$imports" ]
+    then
+        echo "no plugin imports found in $main" >&2
+        return 1
+    fi
+
+    list="$(go version -m "$bin")"
+    for import in $imports
+    do
+        if awk -v imp="$import" '$1 == "dep" && (imp == $2 || index(imp, $2 "/") == 1) { found = 1 } END { exit !found }' <<< "$list"
+        then
+            echo "plugin linked: $import"
+        else
+            echo "plugin MISSING: $import" >&2
+            missing=1
+        fi
+    done
+
+    return "$missing"
+}

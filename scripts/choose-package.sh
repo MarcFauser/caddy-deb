@@ -88,7 +88,8 @@ package_fingerprint "$new_deb" > "$work/new.txt"
 if diff -u "$work/published.txt" "$work/new.txt"
 then
     echo "the package did not change: keeping the published caddy $version"
-    rm -f out/*.deb
+    # the Windows zip of this run carries this run's revision; the kept release has its own
+    rm -f out/*.deb out/*_windows_amd64.zip
     cp "$work/published.deb" "out/$(basename "$filename")"
     echo "$version" > out/version.txt
     result true

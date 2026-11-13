@@ -6,7 +6,8 @@ An apt repository for Debian and Ubuntu with [Caddy](https://caddyserver.com) an
 plugins listed in [`main.go`](main.go), currently the
 [Cloudflare DNS module](https://github.com/caddy-dns/cloudflare). The package replaces
 Caddy's own package file by file, so apt manages the binary that actually runs: no
-`caddy add-package`, no hooks, no build server.
+`caddy add-package`, no hooks, no build server. The same build for Windows comes as a zip
+with an update script, see [On Windows](#on-windows).
 
 ## On a server
 
@@ -144,6 +145,85 @@ with `apt install ./caddy_<version>_amd64.deb`. Caddy's own package is no way ba
 the plugins, and Caddy refuses a configuration that uses a missing module ("module not
 registered").
 
+## On Windows
+
+Every release also has `caddy_<version>_windows_amd64.zip`: the same build for Windows, with
+Caddy's icon and the package version in the file properties (`2.11.9-16` as file version
+2.11.9.16), plus `LICENSE`, `Update-Caddy.ps1` and `Update-Caddy.cmd`. The script installs
+the newest release and restarts the Windows service; it needs
+[PowerShell 7](https://learn.microsoft.com/powershell/scripting/install/installing-powershell-on-windows)
+(`pwsh`). The examples use `C:\caddy` and run in an elevated PowerShell 7.
+
+**1. Unpack.** Download the zip of the newest
+[release](https://github.com/MarcFauser/caddy-deb/releases/latest) (the release page shows
+each file's SHA-256), then:
+
+```powershell
+Expand-Archive "$env:USERPROFILE\Downloads\caddy_2.11.9-16_windows_amd64.zip" C:\caddy
+Get-ChildItem C:\caddy | Unblock-File
+```
+
+`Unblock-File` removes the browser's "downloaded from the internet" mark, which would make
+Windows ask before running the files.
+
+**2. Configure.** Put the `Caddyfile` into `C:\caddy`. As a service, Caddy runs as SYSTEM and
+would keep certificates in that account's profile; to keep them next to Caddy, set the
+storage in the global options:
+
+```
+{
+	storage file_system C:/caddy/data
+}
+```
+
+**3. Create the service.** Caddy runs as a Windows service by itself (Caddy's docs, "Windows
+service"). A service gets environment variables, such as the Cloudflare token, from the
+value `Environment` of its registry key:
+
+```powershell
+New-Service -Name caddy -DisplayName Caddy -StartupType Automatic -BinaryPathName '"C:\caddy\caddy.exe" run --config "C:\caddy\Caddyfile" --adapter caddyfile'
+New-ItemProperty -Path HKLM:\SYSTEM\CurrentControlSet\Services\caddy -Name Environment -PropertyType MultiString -Value 'CLOUDFLARE_API_TOKEN=<token>'
+Start-Service caddy
+```
+
+Who may read the token there is whoever may read that registry key (`Get-Acl`). A Windows
+service cannot be reloaded; after changing the `Caddyfile`, run
+`C:\caddy\caddy.exe reload --config C:\caddy\Caddyfile` (this needs the admin endpoint,
+which is on by default).
+
+**4. Updates.** A scheduled task runs the script every morning as SYSTEM, after Dependabot's
+check:
+
+```powershell
+$action = New-ScheduledTaskAction -Execute "$env:ProgramFiles\PowerShell\7\pwsh.exe" -Argument '-NoProfile -ExecutionPolicy Bypass -File C:\caddy\Update-Caddy.ps1'
+$trigger = New-ScheduledTaskTrigger -Daily -At 06:30
+$principal = New-ScheduledTaskPrincipal -UserId SYSTEM -LogonType ServiceAccount -RunLevel Highest
+Register-ScheduledTask -TaskName 'Caddy update' -Action $action -Trigger $trigger -Principal $principal
+```
+
+The task calls `pwsh` directly: `Update-Caddy.cmd` is for a double click and waits for a key
+when started through `cmd /c`, as the Task Scheduler starts it.
+
+What the script does: it asks GitHub for the newest release, and if its `caddy.exe` is newer
+than the installed one, downloads the zip, checks it against the SHA-256 digest GitHub
+records, stops the service, swaps `caddy.exe` (the old one stays as `caddy.exe.previous`),
+starts the service and checks that it runs. If it does not, the previous `caddy.exe` goes
+back. A stopped service stays stopped, as with apt. It refuses to touch a service that runs
+a `caddy.exe` from another folder, and a `caddy.exe` from its folder that runs outside the
+service. Every run writes a line to `C:\caddy\update-caddy.log` (times in UTC); exit code 0
+means installed or already current. `Get-Help C:\caddy\Update-Caddy.ps1 -Full` lists the
+options, among them `-HealthUrl` for an address that must answer after the start.
+
+The installed version is the file's own: `(Get-Item C:\caddy\caddy.exe).VersionInfo.FileVersion`.
+A `caddy.exe` from elsewhere (Caddy's download page, or `caddy upgrade`, which fetches a build
+with the same plugins from Caddy's build server) has a lower file version, without the
+revision, and the next release replaces it.
+
+**Going back:** stop the task (`Disable-ScheduledTask 'Caddy update'`), stop the service, put
+`caddy.exe.previous` or the `caddy.exe` of an earlier release's zip in place and start the
+service; enable the task again once a fixed version is out. The script updates only
+`caddy.exe`; a newer `Update-Caddy.ps1` comes with the zip and is copied by hand.
+
 ## How a new Caddy version or a new Go gets here
 
 1. Dependabot checks `go.mod` every day at 05:17 Europe/Berlin, weekends included, and
@@ -153,11 +233,14 @@ registered").
    module. Security updates are never held back.
 2. The workflow builds the package and installs it in Debian 12, Debian 13 and
    Ubuntu 24.04 containers and on a runner VM with systemd, each time over Caddy's own
-   package of the same Caddy version.
+   package of the same Caddy version. On a Windows runner, `Update-Caddy.ps1` replaces
+   Caddy's own `caddy.exe` of the same version in a real Windows service with the Windows
+   build, and goes through refusals and a rollback (`tests/windows-test.ps1`).
 3. If all tests pass, the workflow merges the pull request and starts a run on `main`,
    which builds again, signs and publishes the repository on GitHub Pages, attaches the
-   package to a GitHub release, and installs it from the published repository once more,
-   including going back to the oldest offered version and up again.
+   package and the Windows zip to a GitHub release, and installs it from the published
+   repository once more, including going back to the oldest offered version and up again,
+   and on Windows from the release.
 
 **A new Go** comes with the weekly run: `weekly.yml` starts the build on `main` every
 Friday at 04:37 UTC (Go has released on Mondays to Thursdays since 2025). Every build takes
@@ -212,6 +295,12 @@ bash completion are generated by the built binary, and the systemd units, the de
 workflow. [nfpm](https://nfpm.goreleaser.com) packages it (`nfpm.yaml`), following the
 `nfpms` section of Caddy's `.goreleaser.yml`.
 
+The Windows build is the same `go build` with `GOOS=windows`. Like Caddy's own release (xcaddy
+`internal/utils/resource.go`), it embeds Caddy's icon and a version resource with
+[goversioninfo](https://github.com/josephspurrier/goversioninfo); the icon comes from xcaddy
+at `XCADDY_REF` and is checked against `CADDY_ICO_SHA256`. The file version carries the
+package revision, which Caddy's own has not.
+
 Go is the newest stable release at build time (`setup-go` with `go-version: stable` and
 `check-latest: true`); `go.mod` only sets the minimum. `caddy build-info` on a server shows
 the Go version and every module. A new Go release reaches the servers through the weekly run
@@ -220,8 +309,9 @@ the Go version and every module. A new Go release reaches the servers through th
 `scripts/build.sh` builds, `scripts/choose-package.sh` decides between the new and the
 published package, `scripts/fetch-older.sh` fetches the earlier versions from the GitHub
 releases (each checked against the digest GitHub records for it), `scripts/publish.sh`
-creates the signed repository and `caddy-deb.sources`, `tests/install-test.sh` and
-`tests/repo-test.sh` are the tests.
+creates the signed repository and `caddy-deb.sources`, `tests/install-test.sh`,
+`tests/repo-test.sh` and `tests/windows-test.ps1` are the tests, `windows/Update-Caddy.ps1`
+is the update script for Windows.
 
 ## Signing key
 
@@ -235,6 +325,9 @@ the new `caddy-deb.sources`.
 ## Limits
 
 - amd64 only.
+- On Windows, `caddy.exe` has no code signature. What the update script installs is checked
+  against the SHA-256 digest GitHub records for the release file, fetched over HTTPS from
+  GitHub's API; that proves it is the file in this repository's release, not who built it.
 - The Pages site keeps the newest package and the four highest earlier versions (18 MB
   each, against GitHub Pages' 1 GB per site); every package also stays attached to its
   GitHub release.

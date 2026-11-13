@@ -4,3 +4,5 @@ tmp/
 build/
 out/
 site/
+# Windows version resource, written and removed by scripts/build.sh
+resource_windows_amd64.syso
