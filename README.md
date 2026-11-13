@@ -339,38 +339,34 @@ The login uses OpenID Connect: Azure trusts a token GitHub issues for this repos
 environment `code-signing`, and only `main` may use that environment. There is no password
 or key in the repository, and a pull request cannot sign.
 
-**In Azure** (with an Artifact Signing account whose identity validation is done):
+**How it is set up** (2026-11-13). The signing account is FAUSER AG's `ms-artifact-signing`
+(West Europe, tier Basic), its identity validation is FAUSER AG's, and the certificates name
+`CN=FAUSER AG, O=FAUSER AG, L=Gilching, S=Bavaria, C=DE`. The tier Basic allows one
+certificate profile per type (Microsoft's pricing page), so this repository signs with the
+company's *Public Trust* profile `fauser-public`; an own profile would need the tier Premium.
+In Azure:
 
-1. A certificate profile of the type *Public Trust* for this repository. Its own profile
-   gives it its own identity value (below); a profile shared with other software would let
-   the update script accept that software's signature too. The certificate names the
-   organisation or person of the identity validation behind the profile.
-2. An app registration in Microsoft Entra ID with a federated credential: scenario *GitHub
-   actions deploying Azure resources*, organisation `MarcFauser`, repository `caddy-deb`,
-   entity type *Environment*, name `code-signing` (subject
-   `repo:MarcFauser/caddy-deb:environment:code-signing`).
-3. The role *Artifact Signing Certificate Profile Signer* for that app on the signing account
-   (Access control (IAM)).
+1. The app registration `github-caddy-deb-signing` in Microsoft Entra ID, without a secret or
+   certificate, with one federated credential: scenario *GitHub actions deploying Azure
+   resources*, entity type *Environment*, name `code-signing`. GitHub issues tokens for
+   repositories created after 2026-07-15 with owner and repository IDs in the subject, so the
+   subject is `repo:MarcFauser@297020273/caddy-deb@1431913361:environment:code-signing`
+   (`gh api repos/MarcFauser/caddy-deb/actions/oidc/customization/sub` shows the prefix).
+2. The role *Artifact Signing Certificate Profile Signer* for that app on the certificate
+   profile `fauser-public` only (its *Access control (IAM)*), not on the account.
 
-**On GitHub,** as the repository owner:
+On GitHub:
 
-1. *Settings → Environments → New environment* `code-signing`; under *Deployment branches*,
-   choose *Selected branches and tags* and add a rule for `main`.
-2. The repository variables (not secrets; none of them is a credential):
+1. The environment `code-signing`, deployable from `main` only (*Settings → Environments*,
+   *Deployment branches*: *Selected branches and tags*, rule `main`).
+2. The repository variables `AZURE_TENANT_ID`, `AZURE_CLIENT_ID` (the app above),
+   `AZURE_SUBSCRIPTION_ID`, `ARTIFACT_SIGNING_ENDPOINT` (`https://weu.codesigning.azure.net/`,
+   the endpoint of the account's region), `ARTIFACT_SIGNING_ACCOUNT` and
+   `ARTIFACT_SIGNING_PROFILE` (*Settings → Secrets and variables → Actions → Variables*, or
+   `gh variable set NAME --repo MarcFauser/caddy-deb --body VALUE` with a token that may write
+   variables). None of them is a credential.
 
-```bash
-gh variable set AZURE_TENANT_ID --repo MarcFauser/caddy-deb --body <directory (tenant) ID>
-gh variable set AZURE_CLIENT_ID --repo MarcFauser/caddy-deb --body <application (client) ID>
-gh variable set AZURE_SUBSCRIPTION_ID --repo MarcFauser/caddy-deb --body <subscription of the signing account>
-gh variable set ARTIFACT_SIGNING_ENDPOINT --repo MarcFauser/caddy-deb --body <endpoint of the account's region>
-gh variable set ARTIFACT_SIGNING_ACCOUNT --repo MarcFauser/caddy-deb --body <signing account name>
-gh variable set ARTIFACT_SIGNING_PROFILE --repo MarcFauser/caddy-deb --body <certificate profile name>
-```
-
-The endpoint belongs to the region the account was created in, for West Europe
-`https://weu.codesigning.azure.net` (the table in Microsoft's Artifact Signing quickstart
-lists all of them). `ARTIFACT_SIGNING_PROFILE` switches signing on; deleting it switches it
-off again.
+`ARTIFACT_SIGNING_PROFILE` switches signing on; deleting it switches it off again.
 
 **The first signed release:** run the workflow with *new_revision* (`gh workflow run build.yml
 --repo MarcFauser/caddy-deb -f new_revision=true`): an unchanged package keeps its release,
@@ -385,7 +381,10 @@ release on, the script in the zip installs only a `caddy.exe` with a valid, time
 signature from that profile, issued under Microsoft's root for Artifact Signing, and checks
 that before it runs the file. Copy that `Update-Caddy.ps1` onto the Windows servers (the
 script does not replace itself). A run that would publish an unsigned build with a pinning
-script fails in the Windows test.
+script fails in the Windows test. Because `fauser-public` also signs FAUSER AG's own software,
+the pin says "signed by FAUSER AG through that profile", not "built by this repository"; that
+the file is this repository's build is what the SHA-256 digest of the release, the file
+version and `caddy.exe version` check.
 
 If the certificate profile is deleted and created again, it gets a new EKU: set the new one,
 publish, and copy the script again; until then the servers refuse the updates and log why.

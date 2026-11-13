@@ -5,6 +5,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html). This is the version of the
 packaging; the package version follows Caddy (`<caddy version>-<run number>`).
 
+## [3.0.2] - 2026-11-13
+
+### Changed
+
+- README "Code signing" describes the actual setup: FAUSER AG's signing account (tier Basic,
+  one Public Trust profile, so the profile `fauser-public`), the app registration
+  `github-caddy-deb-signing`, the role on that profile only, and the federated credential's
+  subject in GitHub's immutable format with owner and repository IDs. The subject given
+  before (`repo:MarcFauser/caddy-deb:environment:code-signing`) would never have matched:
+  repositories created after 2026-07-15 get the IDs in it.
+
 ## [3.0.1] - 2026-11-13
 
 ### Fixed

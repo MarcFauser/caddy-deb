@@ -211,3 +211,19 @@ for now: the first signed release prints it, and committing it into the script i
 that makes the servers refuse anything else. Signing an open-source project of the owner with
 the identity behind the office's Artifact Signing account is the owner's decision; the
 certificate names whoever was validated for the profile.
+
+The owner decided it the same evening and signed in to Azure for the setup. The plan was a
+certificate profile of its own for this repository, so that the pin would mean "this
+repository" and not "the company". The account turned out to be on the tier Basic, which
+allows one Public Trust profile, and that is the company's `fauser-public`; an own profile
+would have needed Premium. So this repository signs with `fauser-public`, and the role that
+lets GitHub sign is granted on that profile alone, not on the account. That the file is this
+repository's build stays the job of the release digest, the file version and the version
+check.
+
+One detail of the setup would have failed silently: the federated credential's subject.
+GitHub issues tokens for repositories created after 2026-07-15 with the owner's and the
+repository's IDs in the subject (`repo:MarcFauser@297020273/caddy-deb@1431913361:...`), and
+this repository is from October. The subject first written into the README, in the old
+format without IDs, would have made every login fail. The Azure form asks for the IDs by now,
+and the repository's OIDC settings (`actions/oidc/customization/sub`) state the prefix.
