@@ -320,6 +320,48 @@ function Test-Administrator
     return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
+# Moves or deletes a file, waiting while another process holds it open. An antivirus scan of a
+# freshly unpacked caddy.exe does that for a moment: build #23 failed with "The process cannot
+# access the file because it is being used by another process" on a runner, where the same
+# step had passed in five runs before. Other errors are thrown at once.
+function Invoke-FileOperation([string] $Operation, [string] $Path, [string] $Destination)
+{
+    $sharingViolation = -2147024864   # 0x80070020 ERROR_SHARING_VIOLATION
+    $lockViolation = -2147024863      # 0x80070021 ERROR_LOCK_VIOLATION
+    $deadline = [DateTime]::UtcNow.AddSeconds(30)
+    while ($true)
+    {
+        try
+        {
+            if ($Operation -ceq 'Move')
+            {
+                [System.IO.File]::Move($Path, $Destination)
+            }
+            else
+            {
+                [System.IO.File]::Delete($Path)
+            }
+            return
+        }
+        catch
+        {
+            $inner = $_.Exception
+            while ($inner -is [System.Management.Automation.MethodInvocationException] -and $null -ne $inner.InnerException)
+            {
+                $inner = $inner.InnerException
+            }
+            # File.Move reports some locks as UnauthorizedAccessException, not IOException
+            $held = ($inner -is [System.IO.IOException] -and $inner.HResult -in @($sharingViolation, $lockViolation)) -or
+                $inner -is [System.UnauthorizedAccessException]
+            if (-not $held -or [DateTime]::UtcNow -gt $deadline)
+            {
+                throw
+            }
+            Start-Sleep -Milliseconds 500
+        }
+    }
+}
+
 function Wait-ProcessExit([uint32] $ProcessId, [int] $Seconds)
 {
     $deadline = [DateTime]::UtcNow.AddSeconds($Seconds)
@@ -512,23 +554,30 @@ function Invoke-Update
 
         if (Test-Path -LiteralPath $previousFile)
         {
-            [System.IO.File]::Delete($previousFile)
+            Invoke-FileOperation -Operation Delete -Path $previousFile
         }
         if ($hasExe)
         {
-            [System.IO.File]::Move($exeFile, $previousFile)
+            Invoke-FileOperation -Operation Move -Path $exeFile -Destination $previousFile
         }
         try
         {
-            [System.IO.File]::Move($newExe, $exeFile)
+            Invoke-FileOperation -Operation Move -Path $newExe -Destination $exeFile
         }
         catch
         {
+            $moveError = $_.Exception.Message
             if ($hasExe)
             {
-                [System.IO.File]::Move($previousFile, $exeFile)
+                Invoke-FileOperation -Operation Move -Path $previousFile -Destination $exeFile
             }
-            throw
+            # the service was stopped for the swap: it must not stay down
+            if ($wasRunning)
+            {
+                Write-UpdateLog "could not put caddy $($target.Version) in place ($moveError); starting service $ServiceName with the previous caddy.exe"
+                Invoke-ServiceStart
+            }
+            throw "could not put caddy $($target.Version) in place: $moveError"
         }
 
         if (-not $wasRunning)
@@ -561,8 +610,8 @@ function Invoke-Update
             {
                 Invoke-ServiceStop
             }
-            [System.IO.File]::Delete($exeFile)
-            [System.IO.File]::Move($previousFile, $exeFile)
+            Invoke-FileOperation -Operation Delete -Path $exeFile
+            Invoke-FileOperation -Operation Move -Path $previousFile -Destination $exeFile
             try
             {
                 Invoke-ServiceStart

@@ -236,3 +236,12 @@ or goes away. The way past depends on the refusal: a different Artifact Signing 
 be trusted once by its EKU, which the message names; an unsigned file can be installed with
 `-SkipSignatureCheck`; a file that was changed after it was signed gets no way past it in the
 message, because the advice in a refusal is what gets followed in a hurry.
+
+The run that was to precede the first signed release (build #23) failed in the Windows test:
+moving the freshly unpacked `caddy.exe` into an empty folder hit "being used by another
+process", in a step that had passed in five runs. Locally, neither the certificate import of
+the signature check nor running the file left it locked, so the lock came from outside,
+most likely the runner's antivirus scanning a new executable, which a Windows server has as
+well. The script now waits while a file is held. Looking at that code showed a worse case
+next to it: had the move failed after the service was stopped, the old `caddy.exe` went back
+but the service stayed down. It is started again now.

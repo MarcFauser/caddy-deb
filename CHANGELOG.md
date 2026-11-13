@@ -5,6 +5,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html). This is the version of the
 packaging; the package version follows Caddy (`<caddy version>-<run number>`).
 
+## [3.1.1] - 2026-11-13
+
+### Fixed
+
+- `Update-Caddy.ps1` gave up when another process held `caddy.exe` for a moment, as an
+  antivirus scan of a freshly unpacked executable does ("being used by another process",
+  build #23 on a runner, after five runs without it). Moving and deleting `caddy.exe` now wait
+  up to 30 seconds while the file is held; other errors still stop at once.
+- If putting the new `caddy.exe` in place failed after the service had been stopped, the
+  script put the old one back but left the service stopped. It now starts the service again
+  with the previous `caddy.exe` before it reports the failure.
+
 ## [3.1.0] - 2026-11-13
 
 ### Added
