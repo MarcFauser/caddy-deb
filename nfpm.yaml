@@ -1,9 +1,10 @@
 # Package definition for nfpm (https://nfpm.goreleaser.com). It follows the "nfpms"
 # section of Caddy's own .goreleaser.yml (v2.11.7, lines 156-198), so that this package
 # replaces Caddy's package file by file: same name, same paths, same maintainer scripts
-# from caddyserver/dist. scripts/build.sh fills build/ and sets the variables.
+# from caddyserver/dist. scripts/build.sh fills build/ and sets the variables; it runs nfpm
+# once per architecture, with GOARCH set to amd64 or arm64 (the Debian names are the same).
 name: caddy
-arch: amd64
+arch: ${GOARCH}
 platform: linux
 version: ${CADDY_VERSION}
 # Caddy's own package has no revision ("2.11.7"); "2.11.7-<run>" sorts above it, and a
@@ -24,8 +25,11 @@ provides:
   - httpd
 
 contents:
-  - src: ./build/caddy
+  # nfpm expands variables in a content's src only with "expand" (nfpm v2.48.0, nfpm.go,
+  # expandEnvVarsContents)
+  - src: ./build/linux_${GOARCH}/caddy
     dst: /usr/bin/caddy
+    expand: true
     file_info:
       mode: 0755
 

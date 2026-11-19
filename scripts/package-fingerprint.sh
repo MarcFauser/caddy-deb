@@ -1,9 +1,11 @@
 # Sourced by scripts/choose-package.sh. Prints what makes up a caddy package apart from its
 # version and description, so that two builds can be compared:
-# - the build info of /usr/bin/caddy ("caddy build-info": Go version, every module with its
-#   checksum, the build flags), without the lines that only describe this repository's
-#   checkout: the main module's version and the "build vcs..." settings, which Go stamps
-#   from the commit being built;
+# - the build info of /usr/bin/caddy ("go version -m": Go version, every module with its
+#   checksum, the build flags with GOARCH), without the lines that only describe this
+#   repository's checkout: the main module's version and the "build vcs..." settings, which
+#   Go stamps from the commit being built. "go version -m" reads it from the file without
+#   running it, so the arm64 package is compared on an amd64 runner as well; it is the same
+#   information "caddy build-info" prints (runtime/debug.BuildInfo);
 # - the checksum of every other file, except the man pages: Caddy generates them with
 #   cobra, whose header carries the build date unless SOURCE_DATE_EPOCH is set
 #   (cobra v1.10.2 doc/man_docs.go, lines 125-136), and they follow from the binary anyway;
@@ -18,7 +20,9 @@ package_fingerprint()
     dpkg-deb --control "$deb" "$dir/control"
 
     echo "== build info of /usr/bin/caddy"
-    "$dir/data/usr/bin/caddy" build-info | grep -v -e '^mod[[:space:]]' -e '^build[[:space:]]vcs'
+    # run in the folder, so that the first line names "caddy" and not the temporary folder
+    (cd "$dir/data/usr/bin" && go version -m caddy) \
+        | grep -v -e '^[[:space:]]*mod[[:space:]]' -e '^[[:space:]]*build[[:space:]]vcs'
 
     echo "== files"
     (

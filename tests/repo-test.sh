@@ -6,7 +6,8 @@
 # install the oldest offered version, hold it, release the hold, upgrade to the newest.
 # Run as root on a throwaway Debian or Ubuntu machine, from the repository folder:
 #   tests/repo-test.sh <repository URL> <expected package version> ["<offered versions>"]
-# The offered versions default to the expected version alone.
+# The offered versions are those of this machine's architecture and default to the expected
+# version alone.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -16,6 +17,8 @@ url="${1%/}"
 expected="$2"
 offered="${3:-$2}"
 export DEBIAN_FRONTEND=noninteractive
+# needrestart (Ubuntu runner VM, publish dry run) would otherwise restart services of the runner
+export NEEDRESTART_SUSPEND=1
 
 installed_version()
 {
@@ -63,7 +66,7 @@ printf '%s\n' "$policy"
 expected_list="$(tr ' ' '\n' <<< "$offered" | awk 'NF' | sort -V -r | paste -sd ' ')"
 madison="$(apt-cache madison caddy)"
 printf '%s\n' "$madison"
-offered_list="$(awk -F'|' '$3 ~ /marcfauser\.github\.io\/caddy-deb/ { gsub(/[[:space:]]/, "", $2); print $2 }' <<< "$madison" | sort -V -r | paste -sd ' ')"
+offered_list="$(awk -F'|' -v url="$url" 'index($3, url) > 0 { gsub(/[[:space:]]/, "", $2); print $2 }' <<< "$madison" | sort -V -r | paste -sd ' ')"
 echo "offered by the repository: $offered_list"
 echo "expected:                  $expected_list"
 [ "$offered_list" = "$expected_list" ] || { echo "FAIL: the repository does not offer exactly the expected versions" >&2; exit 1; }
@@ -71,6 +74,10 @@ oldest="$(tr ' ' '\n' <<< "$expected_list" | awk 'NF { v = $0 } END { print v }'
 
 apt-get install -y -q caddy
 [ "$(installed_version)" = "$expected" ] || { echo "FAIL: installed version is not $expected" >&2; exit 1; }
+arch="$(dpkg --print-architecture)"
+[ "$(dpkg-query -W -f='${Architecture}' caddy)" = "$arch" ] \
+    || { echo "FAIL: the installed caddy is not for $arch" >&2; exit 1; }
+echo "installed caddy $expected for $arch"
 check_plugins /usr/bin/caddy main.go
 
 if [ "$oldest" != "$expected" ]

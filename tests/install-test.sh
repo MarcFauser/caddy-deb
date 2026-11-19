@@ -2,8 +2,9 @@
 # Installs the built package on a throwaway Debian or Ubuntu machine the way a server
 # switches over: first Caddy's own package of the same Caddy version from Caddy's apt
 # repository, then this package on top of it. Checks the version, the plugins, dpkg --verify, the files and, where
-# systemd runs, that Caddy runs the new binary. Run as root, from the repository folder:
-#   tests/install-test.sh out/caddy_<version>_amd64.deb
+# systemd runs, that Caddy runs the new binary. Run as root, from the repository folder, with
+# the package of this machine's architecture:
+#   tests/install-test.sh out/caddy_<version>_$(dpkg --print-architecture).deb
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -11,6 +12,12 @@ cd "$(dirname "$0")/.."
 
 deb="$(readlink -f "$1")"
 expected="$(dpkg-deb --field "$deb" Version)"
+deb_arch="$(dpkg-deb --field "$deb" Architecture)"
+if [ "$deb_arch" != "$(dpkg --print-architecture)" ]
+then
+    echo "FAIL: $deb is for $deb_arch, this machine is $(dpkg --print-architecture)" >&2
+    exit 1
+fi
 export DEBIAN_FRONTEND=noninteractive
 # needrestart (Ubuntu runner VM) would otherwise restart services of the runner
 export NEEDRESTART_SUSPEND=1
@@ -50,7 +57,7 @@ apt-get install -y -q "caddy=$upstream"
 [ "$(dpkg-query -W -f='${Version}' caddy)" = "$upstream" ] || fail "Caddy's own caddy $upstream is not installed"
 echo "installed: caddy $(dpkg-query -W -f='${Version}' caddy)"
 
-step "this package on top: $deb ($expected)"
+step "this package on top: $deb ($expected, $deb_arch)"
 apt-get install -y -q "$deb"
 
 step "checks"

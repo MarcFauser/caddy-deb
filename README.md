@@ -2,11 +2,12 @@
 
 [![build](https://github.com/MarcFauser/caddy-deb/actions/workflows/build.yml/badge.svg)](https://github.com/MarcFauser/caddy-deb/actions/workflows/build.yml)
 
-An apt repository for Debian and Ubuntu with [Caddy](https://caddyserver.com) and the
+An apt repository for Debian and Ubuntu on amd64 and arm64 with [Caddy](https://caddyserver.com) and the
 plugins listed in [`main.go`](main.go), currently the
 [Cloudflare DNS module](https://github.com/caddy-dns/cloudflare). The package replaces
 Caddy's own package file by file, so apt manages the binary that actually runs: no
-`caddy add-package`, no hooks, no build server. The same build for Windows comes as a zip
+`caddy add-package`, no hooks, no build server. arm64 covers 64-bit ARM machines such as a
+Raspberry Pi with the 64-bit Raspberry Pi OS. The same build for Windows comes as a zip
 with an update script, see [On Windows](#on-windows).
 
 ## On a server
@@ -25,8 +26,9 @@ curl -fsSL https://marcfauser.github.io/caddy-deb/caddy-deb.sources -o /etc/apt/
 
 `caddy-deb.sources` is one file in apt's deb822 format, the format `apt modernize-sources`
 converts to, with the signing key embedded in `Signed-By`. No separate keyring file is
-needed; apt reads embedded keys since 2.3.10 (Debian 12, Ubuntu 22.04 and newer). The
-signing key's fingerprint is
+needed; apt reads embedded keys since 2.3.10 (Debian 12, Ubuntu 22.04 and newer). The file
+names no architecture, so apt takes the server's own (`dpkg --print-architecture`: `amd64`
+or `arm64`). The signing key's fingerprint is
 
 ```
 6E579242465097B599FC9701FE8A040F3C7F97AD
@@ -48,6 +50,9 @@ rm /etc/apt/sources.list.d/caddy-deb.list /usr/share/keyrings/caddy-deb.gpg
 Two entries for the same repository with different `Signed-By` make apt stop with
 "Conflicting values set for option Signed-By". The old way keeps working, so there is no
 hurry.
+
+*Fetched before caddy-deb 4.0.0?* That `caddy-deb.sources` says `Architectures: amd64`, which
+keeps working on amd64 and needs nothing. Only for an arm64 server, fetch the current file.
 
 **2. Remove Caddy's own repository.** Otherwise apt takes a new official version without
 plugins as soon as it is out and this repository's build is not yet. Its file name depends on
@@ -114,9 +119,10 @@ postinst runs `try-restart`, as in Caddy's own package).
 
 ## Going back to an earlier version
 
-The repository offers the current package and the four highest earlier versions
-(`KEEP_VERSIONS` in the workflow), so a server can go back if the newest one has a bug. As
-root, list them:
+The repository offers the current package and the four highest earlier versions of each
+architecture (`KEEP_VERSIONS` in the workflow), so a server can go back if the newest one has
+a bug. arm64 packages exist from caddy-deb 4.0.0 on, so arm64 has fewer earlier versions until
+there have been five arm64 releases. As root, list them:
 
 ```bash
 apt-cache madison caddy
@@ -141,7 +147,7 @@ apt upgrade
 
 Older versions stay attached to their
 [GitHub releases](https://github.com/MarcFauser/caddy-deb/releases); install a downloaded one
-with `apt install ./caddy_<version>_amd64.deb`. Caddy's own package is no way back: it lacks
+with `apt install ./caddy_<version>_<architecture>.deb`. Caddy's own package is no way back: it lacks
 the plugins, and Caddy refuses a configuration that uses a missing module ("module not
 registered").
 
@@ -237,17 +243,19 @@ service; enable the task again once a fixed version is out. The script updates o
    same morning; a new plugin version only after 3 days (`cooldown` in
    `.github/dependabot.yml`), a protection against a bad release of a small third-party
    module. Security updates are never held back.
-2. The workflow builds the package and installs it in Debian 12, Debian 13 and
-   Ubuntu 24.04 containers and on a runner VM with systemd, each time over Caddy's own
-   package of the same Caddy version. On a Windows runner, `Update-Caddy.ps1` replaces
+2. The workflow builds the packages and installs each in Debian 12, Debian 13 and
+   Ubuntu 24.04 containers and on a runner VM with systemd, on an amd64 and on an arm64
+   runner, each time over Caddy's own package of the same Caddy version. A dry run of the
+   publishing builds the repository with a throwaway key, serves it from the runner and
+   installs from it as a server does, also on both architectures. On a Windows runner, `Update-Caddy.ps1` replaces
    Caddy's own `caddy.exe` of the same version in a real Windows service with the Windows
    build, and goes through refusals and a rollback (`tests/windows-test.ps1`).
 3. If all tests pass, the workflow merges the pull request and starts a run on `main`,
    which builds again, signs the Windows build if code signing is set up, tests again, signs
    and publishes the repository on GitHub Pages, attaches the
-   package and the Windows zip to a GitHub release, and installs it from the published
-   repository once more, including going back to the oldest offered version and up again,
-   and on Windows from the release.
+   packages and the Windows zip to a GitHub release, and installs from the published
+   repository once more on amd64 and arm64, including going back to the oldest offered
+   version and up again, and on Windows from the release.
 
 **A new Go** comes with the weekly run: `weekly.yml` starts the build on `main` every
 Friday at 04:37 UTC (Go has released on Mondays to Thursdays since 2025). Every build takes
@@ -272,7 +280,9 @@ anyway, tick *new_revision* when running the workflow by hand, or
 `gh workflow run build.yml --repo MarcFauser/caddy-deb -f new_revision=true`.
 
 The package version is Caddy's plus the number of the run that built it, for example
-`2.11.7-12`; runs that keep the published package leave gaps. Caddy's own package is
+`2.11.7-12`, the same for amd64 and arm64: a change in either gives both a new revision, and
+a run keeps the published packages only if neither changed. Runs that keep the published
+packages leave gaps. Caddy's own package is
 `2.11.7`, so this one sorts above it, and a newer build of the same Caddy version sorts
 above an older one. A kept package still names the caddy-deb version that built it in its
 description. If a new Caddy version does not build with a plugin (or with a future
@@ -294,9 +304,10 @@ and open a pull request. The build fails unless every import in that block shows
 ## How it is built
 
 The way Caddy describes it in its own `cmd/caddy/main.go`: copy `main.go`, add the module
-imports, `go build`. The flags are those of Caddy's release build (`CGO_ENABLED=0`,
+imports, `go build`, once per architecture (`GOARCH=amd64` and `GOARCH=arm64`, both on the
+amd64 build runner). The flags are those of Caddy's release build (`CGO_ENABLED=0`,
 `-trimpath -mod=readonly -ldflags '-s -w' -tags nobadger,nomysql,nopgx`). Man pages and
-bash completion are generated by the built binary, and the systemd units, the default
+bash completion are generated by the amd64 binary for both packages, and the systemd units, the default
 `Caddyfile`, the welcome page and the maintainer scripts come from
 [caddyserver/dist](https://github.com/caddyserver/dist) at the commit in `DIST_REF` in the
 workflow. [nfpm](https://nfpm.goreleaser.com) packages it (`nfpm.yaml`), following the
@@ -413,13 +424,14 @@ Get-AuthenticodeSignature C:\caddy\caddy.exe | Format-List Status, SignerCertifi
 
 ## Limits
 
-- amd64 only.
+- Debian packages for amd64 and arm64 only (no 32-bit ARM such as `armhf`), Windows for amd64
+  only.
 - On Windows, `caddy.exe` of releases before the first signed one has no code signature, and
   an `Update-Caddy.ps1` older than 3.1.0 checks only the SHA-256 digest GitHub records for the
   release file; that proves it is the file in this repository's release, not who signed it.
-- The Pages site keeps the newest package and the four highest earlier versions (18 MB
-  each, against GitHub Pages' 1 GB per site); every package also stays attached to its
-  GitHub release.
+- The Pages site keeps the newest package and the four highest earlier versions of each
+  architecture (about 18 MB each, ten packages against GitHub Pages' 1 GB per site); every
+  package also stays attached to its GitHub release.
 - Right after a publish, GitHub Pages can serve old and new files for a short while; an
   `apt update` in that window may fail and work on the next try.
 - GitHub disables a scheduled workflow in a public repository after 60 days without

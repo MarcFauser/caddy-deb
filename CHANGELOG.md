@@ -5,6 +5,35 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html). This is the version of the
 packaging; the package version follows Caddy (`<caddy version>-<run number>`).
 
+## [4.0.0] - 2026-11-19
+
+### Added
+
+- A Debian package for arm64 next to amd64, cross-compiled on the amd64 runner
+  (`GOARCH=arm64`), with the same version, files and maintainer scripts; man pages and bash
+  completion come from the amd64 binary for both. The repository has a `binary-arm64` index,
+  the Release file lists both architectures, and every release carries both packages.
+- Tests on an arm64 runner (`ubuntu-24.04-arm`): the install test in Debian 12, Debian 13 and
+  Ubuntu 24.04 containers and on the runner VM with systemd, and the install from the
+  published repository.
+- A publish dry run on every run, for amd64 and arm64: the choice between new and published
+  packages, the earlier versions from the releases and the repository, signed with a
+  throwaway key, served from the runner and installed from in a debian:13 container,
+  including going back. Until now the publishing scripts ran only when publishing.
+
+### Changed
+
+- All architectures share one version: a run keeps the published packages only if no
+  architecture changed, otherwise all get the new revision. The first arm64 run therefore
+  gives amd64 servers a new revision with the same content, and one Caddy restart.
+- The package comparison reads the build info with `go version -m` instead of running
+  `caddy build-info`, so that it works for the arm64 package on the amd64 runner.
+- Earlier versions are kept per architecture (`KEEP_VERSIONS` each); arm64 starts without.
+- `caddy-deb.sources` has no `Architectures:` line any more, so one file serves amd64 and
+  arm64. Files fetched before keep `Architectures: amd64` and keep working on amd64.
+- `scripts/publish.sh` takes the repository address from `PAGES_URL` (the dry run serves from
+  the runner); `tests/repo-test.sh` finds the offered versions by that address.
+
 ## [3.1.1] - 2026-11-13
 
 ### Fixed

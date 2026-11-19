@@ -2,11 +2,12 @@ name: build
 
 # Pull requests (also Dependabot's): build and test. Dependabot's pull requests are merged
 # when the tests pass. Pushes to main and manual runs (also the weekly one from weekly.yml):
-# build, test, publish to GitHub Pages and check the published repository. A new package
-# revision is published only when the package itself changed (scripts/choose-package.sh);
-# otherwise the published package stays and the servers have nothing to install. The
-# repository also offers earlier versions from the GitHub releases (KEEP_VERSIONS in total,
-# scripts/fetch-older.sh) for going back. Every release also carries the Windows build as a
+# build, test, publish to GitHub Pages and check the published repository. There is a
+# package for amd64 and one for arm64, with the same version; each is tested on a runner of
+# its architecture. A new package revision is published only when a package changed
+# (scripts/choose-package.sh); otherwise the published packages stay and the servers have
+# nothing to install. The repository also offers earlier versions from the GitHub releases
+# (KEEP_VERSIONS per architecture, scripts/fetch-older.sh) for going back. Every release also carries the Windows build as a
 # zip, which windows/Update-Caddy.ps1 installs on Windows servers. Once the repository
 # variables for Azure Artifact Signing are set (README, "Code signing"), publishing runs sign
 # caddy.exe and Update-Caddy.ps1 before they are tested and released.
@@ -75,37 +76,116 @@ jobs:
           if-no-files-found: error
 
   test:
-    name: install on ${{ matrix.image }}
+    # ubuntu-24.04-arm is a standard GitHub-hosted runner for public repositories (GitHub docs,
+    # "Supported runners"); a container job there runs the arm64 variant of the image.
+    name: install on ${{ matrix.image }} (${{ matrix.arch }})
     needs: build
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
     container: ${{ matrix.image }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
         image: ['debian:12', 'debian:13', 'ubuntu:24.04']
+        arch: [amd64, arm64]
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
           name: deb
           path: out
-      - run: bash tests/install-test.sh out/*.deb
+      - shell: bash
+        run: bash tests/install-test.sh "out/caddy_$(cat out/version.txt)_$(dpkg --print-architecture).deb"
 
   test-systemd:
     # Directly on the runner VM: systemd runs there, so Caddy really runs. The VM is thrown
     # away after the job.
-    name: install with systemd (runner VM)
+    name: install with systemd (runner VM, ${{ matrix.arch }})
     needs: build
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
           name: deb
           path: out
-      - run: sudo bash tests/install-test.sh out/*.deb
+      - run: sudo bash tests/install-test.sh "out/caddy_$(cat out/version.txt)_$(dpkg --print-architecture).deb"
+
+  test-publish:
+    # The publishing scripts on every run, before anything is published: the same choice
+    # between the new and the published packages and the same earlier versions from the
+    # releases as the publish job, then the repository, signed with a throwaway key, served
+    # from this VM and installed from as a server does, including going back
+    # (tests/repo-test.sh). The installing runs in a debian:13 container, as in the verify job:
+    # its "apt-get upgrade" would otherwise upgrade the whole runner VM.
+    name: publish dry run (${{ matrix.arch }})
+    needs: build
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          check-latest: true
+      - uses: actions/download-artifact@v8
+        with:
+          name: deb
+          path: out
+      - name: choose and fetch as the publish job does
+        env:
+          FORCE: ${{ inputs.new_revision }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          bash scripts/choose-package.sh
+          bash scripts/fetch-older.sh
+      - name: build the repository with a throwaway key
+        env:
+          PAGES_URL: http://127.0.0.1:8080
+        run: |
+          command -v apt-ftparchive >/dev/null || sudo apt-get install -y -q apt-utils
+          GNUPGHOME="$(mktemp -d)"
+          export GNUPGHOME
+          gpg --batch --passphrase '' --quick-generate-key 'caddy-deb dry run' ed25519 sign 1d
+          # only in this throwaway checkout: publish.sh and repo-test.sh trust caddy-deb.gpg
+          gpg --batch --export > caddy-deb.gpg
+          bash scripts/publish.sh
+          grep -q '^URIs: http://127.0.0.1:8080$' site/caddy-deb.sources
+      - name: install from it as a server does
+        run: |
+          python3 -m http.server 8080 --bind 127.0.0.1 --directory site > http.log 2>&1 &
+          for attempt in $(seq 20)
+          do
+              curl -fsS -o /dev/null http://127.0.0.1:8080/caddy-deb.sources && break
+              sleep 1
+          done
+          arch="$(dpkg --print-architecture)"
+          # --network host: the container reaches the server on this VM's 127.0.0.1
+          docker run --rm --network host -v "$PWD:/w" -w /w debian:13 \
+              bash tests/repo-test.sh http://127.0.0.1:8080 "$(cat out/version.txt)" "$(paste -sd ' ' "out/offered-versions-$arch.txt")"
 
   sign-windows:
     # Azure Artifact Signing, in publishing runs and only once ARTIFACT_SIGNING_PROFILE is set.
@@ -211,8 +291,8 @@ jobs:
 
   merge:
     name: merge the Dependabot update
-    needs: [test, test-systemd, test-windows]
-    if: ${{ !cancelled() && needs.test.result == 'success' && needs.test-systemd.result == 'success' && needs.test-windows.result == 'success' && github.event_name == 'pull_request' && github.event.pull_request.user.login == 'dependabot[bot]' }}
+    needs: [test, test-systemd, test-publish, test-windows]
+    if: ${{ !cancelled() && needs.test.result == 'success' && needs.test-systemd.result == 'success' && needs.test-publish.result == 'success' && needs.test-windows.result == 'success' && github.event_name == 'pull_request' && github.event.pull_request.user.login == 'dependabot[bot]' }}
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -232,8 +312,8 @@ jobs:
 
   publish:
     name: publish to GitHub Pages
-    needs: [build, sign-windows, test, test-systemd, test-windows]
-    if: ${{ !cancelled() && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && needs.build.result == 'success' && (needs.sign-windows.result == 'success' || needs.sign-windows.result == 'skipped') && needs.test.result == 'success' && needs.test-systemd.result == 'success' && needs.test-windows.result == 'success' }}
+    needs: [build, sign-windows, test, test-systemd, test-publish, test-windows]
+    if: ${{ !cancelled() && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && needs.build.result == 'success' && (needs.sign-windows.result == 'success' || needs.sign-windows.result == 'skipped') && needs.test.result == 'success' && needs.test-systemd.result == 'success' && needs.test-publish.result == 'success' && needs.test-windows.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
@@ -250,9 +330,16 @@ jobs:
       page_url: ${{ steps.deploy.outputs.page_url }}
       version: ${{ steps.version.outputs.version }}
       reused: ${{ steps.choose.outputs.reused }}
-      offered: ${{ steps.offered.outputs.offered }}
+      offered_amd64: ${{ steps.offered.outputs.offered_amd64 }}
+      offered_arm64: ${{ steps.offered.outputs.offered_arm64 }}
     steps:
       - uses: actions/checkout@v7
+      # "go version -m" for the package comparison (scripts/package-fingerprint.sh), which reads
+      # the build info of the arm64 binary without running it
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          check-latest: true
       - uses: actions/download-artifact@v8
         with:
           name: deb
@@ -299,7 +386,11 @@ jobs:
           command -v apt-ftparchive >/dev/null || sudo apt-get install -y -q apt-utils
           bash scripts/publish.sh
       - id: offered
-        run: echo "offered=$(paste -sd ' ' out/offered-versions.txt)" >> "$GITHUB_OUTPUT"
+        run: |
+          for arch in amd64 arm64
+          do
+              echo "offered_$arch=$(paste -sd ' ' "out/offered-versions-$arch.txt")" >> "$GITHUB_OUTPUT"
+          done
       # One artifact name per attempt: a re-run keeps the artifact of the earlier attempt in the
       # run, and deploy-pages refuses two of the same name ("Multiple artifacts named
       # github-pages", build #14 on 2026-11-07). Both steps are in this job, so they always see
@@ -327,19 +418,40 @@ jobs:
           else
               gh release create "v$VERSION" out/*.deb out/*_windows_amd64.zip --target "$GITHUB_SHA" \
                   --title "caddy $VERSION" \
-                  --notes "caddy $VERSION (amd64), built by run ${{ github.run_number }} from $GITHUB_SHA."
+                  --notes "caddy $VERSION (Debian packages for amd64 and arm64, Windows amd64), built by run ${{ github.run_number }} from $GITHUB_SHA."
           fi
 
   verify:
-    name: install from the published repository
+    name: install from the published repository (${{ matrix.arch }})
     needs: publish
     if: ${{ !cancelled() && needs.publish.result == 'success' }}
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
     container: debian:13
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v7
-      - run: bash tests/repo-test.sh "${{ needs.publish.outputs.page_url }}" "${{ needs.publish.outputs.version }}" "${{ needs.publish.outputs.offered }}"
+      - shell: bash
+        env:
+          PAGE_URL: ${{ needs.publish.outputs.page_url }}
+          VERSION: ${{ needs.publish.outputs.version }}
+          OFFERED_AMD64: ${{ needs.publish.outputs.offered_amd64 }}
+          OFFERED_ARM64: ${{ needs.publish.outputs.offered_arm64 }}
+        run: |
+          case "$(dpkg --print-architecture)" in
+              amd64) offered="$OFFERED_AMD64" ;;
+              arm64) offered="$OFFERED_ARM64" ;;
+              *) echo "FAIL: no offered versions for $(dpkg --print-architecture)" >&2; exit 1 ;;
+          esac
+          [ -n "$offered" ] || { echo "FAIL: the publish job offered no versions for this architecture" >&2; exit 1; }
+          bash tests/repo-test.sh "$PAGE_URL" "$VERSION" "$offered"
 
   verify-windows:
     # Update-Caddy.ps1 installs the new release from GitHub. A kept package has no new
